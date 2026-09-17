@@ -14,6 +14,19 @@ into a bias estimate (assuming the user looks roughly at the screen while the
 app starts up), then locked for the rest of the session -- no explicit
 calibration screen, just an implicit zero-point. Phase 7 replaces this with
 continuous online bias adaptation from natural read-back behaviour.
+
+The `half_fov_*_rad` constants are a *guess* at how many radians of pitch/yaw
+correspond to the full screen half-width/height -- calibrated for an assumed
+50cm laptop setup. Real setups (screen size, distance, this particular
+person's actual achievable gaze range) vary, so a fixed guess systematically
+under- or over-shoots: e.g. looking at an edge key never reaches the edge of
+the mapped [0,1] range. To stay calibration-free while still correcting for
+this, the mapper also auto-expands its effective range the first time it
+observes a larger swing than the configured guess -- so once you've looked at
+a screen edge once, that becomes the new reference and later glances there
+reach it correctly. The configured value is only the *initial* (and minimum)
+range; it grows, never shrinks, and is capped by `max_range_rad` against
+noise/outliers.
 """
 
 from __future__ import annotations
@@ -29,6 +42,7 @@ class GazeMappingConfig:
     invert_y: bool = False
     smoothing_alpha: float = 0.35
     startup_bias_frames: int = 20  # ~1s at 20fps; averaged to auto-center the resting gaze bias
+    max_range_rad: float = 0.9  # sanity cap on auto-expanded range, so one noisy outlier can't blow it up
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -42,7 +56,9 @@ class GazeMappingConfig:
 
 class GazeToScreenMapper:
     """Converts (pitch, yaw) into a smoothed, normalized screen point (x, y),
-    after subtracting a one-time auto-centered bias (see module docstring)."""
+    after subtracting a one-time auto-centered bias and auto-expanding the
+    mapped range to whatever extremes have actually been observed (see
+    module docstring)."""
 
     def __init__(self, config: GazeMappingConfig | None = None) -> None:
         self.config = config or GazeMappingConfig()
@@ -52,6 +68,8 @@ class GazeToScreenMapper:
         self._bias_yaw = 0.0
         self._bias_samples: list[tuple[float, float]] = []
         self._bias_locked = False
+        self._range_yaw = self.config.half_fov_yaw_rad
+        self._range_pitch = self.config.half_fov_pitch_rad
 
     def reset(self) -> None:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
@@ -59,11 +77,13 @@ class GazeToScreenMapper:
         self._smoothed_y = None
 
     def recenter(self) -> None:
-        """Re-run startup auto-centering (e.g. if the user's position/setup changed mid-session)."""
+        """Re-run startup auto-centering and range expansion (e.g. if the user's setup changed)."""
         self._bias_pitch = 0.0
         self._bias_yaw = 0.0
         self._bias_samples = []
         self._bias_locked = False
+        self._range_yaw = self.config.half_fov_yaw_rad
+        self._range_pitch = self.config.half_fov_pitch_rad
 
     def map(self, pitch: float, yaw: float) -> tuple[float, float]:
         cfg = self.config
@@ -80,8 +100,14 @@ class GazeToScreenMapper:
         else:
             rel_pitch = pitch - self._bias_pitch
             rel_yaw = yaw - self._bias_yaw
-            raw_x = 0.5 + 0.5 * (rel_yaw / cfg.half_fov_yaw_rad)
-            raw_y = 0.5 - 0.5 * (rel_pitch / cfg.half_fov_pitch_rad)
+
+            # Auto-expand the effective range toward whatever extremes we've
+            # actually seen, capped against a single noisy outlier.
+            self._range_yaw = min(max(self._range_yaw, abs(rel_yaw)), cfg.max_range_rad)
+            self._range_pitch = min(max(self._range_pitch, abs(rel_pitch)), cfg.max_range_rad)
+
+            raw_x = 0.5 + 0.5 * (rel_yaw / self._range_yaw)
+            raw_y = 0.5 - 0.5 * (rel_pitch / self._range_pitch)
             if cfg.invert_x:
                 raw_x = 1.0 - raw_x
             if cfg.invert_y:

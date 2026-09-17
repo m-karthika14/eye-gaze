@@ -1,0 +1,14 @@
+# Placeholder, calibration-free heuristic for mapping raw gaze angle
+# (pitch/yaw from vision/face_gaze.py) to a normalized on-screen point [0,1].
+#
+# This is NOT a calibrated model. It assumes a typical laptop setup (webcam
+# mounted at top-center of the screen, ~50cm viewing distance) purely so
+# Phase 1's debug visualization moves in the right direction as the user
+# looks around. Phase 3 replaces this with a calibrated Gaussian probability
+# mapping over keyboard keys; Phase 7 adds per-user bias correction on top.
+
+half_fov_yaw_rad: 0.33   # horizontal angle mapped to the screen half-width (~19deg)
+half_fov_pitch_rad: 0.19 # vertical angle mapped to the screen half-height (~11deg)
+invert_x: false          # flip if left/right feels mirrored on your setup
+invert_y: false
+smoothing_alpha: 0.35    # EMA smoothing on the normalized point; lower = smoother/laggier

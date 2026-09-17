@@ -8,10 +8,11 @@ python-dotenv
 pyyaml
 
 # --- Phase 1: webcam & gaze foundation ---
-opencv-python
-mediapipe
-torch
-torchvision
+# uniface (MIT, ONNX Runtime) provides both the face detector (RetinaFace) and
+# a pretrained full-face-CNN gaze model (MobileGaze: ResNet18/34/50, MobileNetV2),
+# weights auto-downloaded + SHA-256 verified on first use. opencv-python comes
+# in as its dependency and also drives webcam capture + the debug visualizer.
+uniface[cpu]
 
 # --- Phase 2: backend / WebSocket streaming ---
 fastapi
@@ -23,7 +24,7 @@ numpy
 scipy
 
 # --- Phase 4: character-level LM (local) ---
-# (torch already covers Transformer/GRU option; add tokenizers if needed later)
+torch
 
 # --- Phase 9: experiment analysis ---
 scikit-learn

@@ -35,8 +35,21 @@ Each folder has its own `README.md` describing its role and current phase status
    python llm_services/test_connection.py
    ```
 
-3. **Frontend** — scaffolded starting Phase 2 (keyboard UI). Not yet initialized.
+3. **Run the S0 baseline** (backend + frontend, two terminals):
+   ```
+   .venv/Scripts/python.exe -m uvicorn backend.main:app --reload --port 8000
+   ```
+   ```
+   cd frontend && npm install && npm run dev
+   ```
+   Open `http://localhost:5173`. Look at a key and dwell ~500ms to type it.
 
 ## Project status
 
-Currently executing **Phase 0 — Specification Freeze** (see Section 19 of `MASTER_PROJECT_DOCUMENT.md`). The research design is frozen; no new features are being brainstormed. Implementation proceeds phase by phase, S0 → S4, per the roadmap.
+Phases 0-2 complete:
+
+- **Phase 0** — specification frozen, repo skeleton, Groq connectivity verified end to end.
+- **Phase 1** — webcam capture, face detection + pretrained full-face gaze CNN (`uniface`: RetinaFace + MobileGaze), heuristic calibration-free pitch/yaw → screen-point mapping, live debug visualizer (`vision/run_demo.py`).
+- **Phase 2** — S0 baseline: nearest-key hard selection + dwell detection + text buffer (`/decoder`, `/experiments/s0.py`), FastAPI WebSocket server (`/backend`), React keyboard UI (`/frontend`). Verified end to end against the live camera.
+
+Next: **Phase 3 — Uncertainty Modelling & Calibration**. See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.

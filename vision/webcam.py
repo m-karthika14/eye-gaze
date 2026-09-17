@@ -35,10 +35,17 @@ class Webcam:
                 "camera is connected and not in use by another application."
             )
 
-    def frames(self) -> Iterator[np.ndarray]:
-        """Yields frames paced to roughly self.target_fps."""
+    def frames(self, max_consecutive_failures: int = 60) -> Iterator[np.ndarray]:
+        """Yields frames paced to roughly self.target_fps.
+
+        A single failed read (ok=False) is common and transient with
+        DirectShow on Windows -- USB scheduling hiccups, brief driver stalls
+        -- and does not mean the camera is gone. Only gives up after
+        max_consecutive_failures reads in a row fail (default ~2s at 30fps).
+        """
         min_interval = 1.0 / self.target_fps
         last = 0.0
+        consecutive_failures = 0
         while True:
             elapsed = time.monotonic() - last
             if elapsed < min_interval:
@@ -46,7 +53,11 @@ class Webcam:
             ok, frame = self._cap.read()
             last = time.monotonic()
             if not ok:
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    break
+                continue
+            consecutive_failures = 0
             yield frame
 
     def release(self) -> None:

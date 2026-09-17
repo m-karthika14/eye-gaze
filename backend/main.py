@@ -65,8 +65,16 @@ async def ws_gaze(websocket: WebSocket) -> None:
 
     try:
         while True:
-            sample = await loop.run_in_executor(None, next_sample)
+            try:
+                sample = await loop.run_in_executor(None, next_sample)
+            except Exception as exc:  # noqa: BLE001 -- surface it to the client, don't die silently
+                await websocket.send_json({"error": f"Vision pipeline error: {exc}"})
+                break
+
             if sample is None:
+                await websocket.send_json(
+                    {"error": "Webcam stream ended (camera disconnected, unplugged, or unreadable)."}
+                )
                 break
 
             event = s0.process_sample(sample["gaze_x"], sample["gaze_y"], time.monotonic())

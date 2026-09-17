@@ -1,0 +1,31 @@
+# Calibration-Free Webcam Gaze Decoding — Python dependencies
+# Grouped by the phase that first needs them (see MASTER_PROJECT_DOCUMENT.md Section 19).
+# Install as needed; not every phase needs every group installed at once.
+
+# --- Phase 0: Groq connectivity ---
+groq
+python-dotenv
+pyyaml
+
+# --- Phase 1: webcam & gaze foundation ---
+opencv-python
+mediapipe
+torch
+torchvision
+
+# --- Phase 2: backend / WebSocket streaming ---
+fastapi
+uvicorn[standard]
+websockets
+
+# --- Phase 3: uncertainty modelling & decoder ---
+numpy
+scipy
+
+# --- Phase 4: character-level LM (local) ---
+# (torch already covers Transformer/GRU option; add tokenizers if needed later)
+
+# --- Phase 9: experiment analysis ---
+scikit-learn
+pandas
+matplotlib

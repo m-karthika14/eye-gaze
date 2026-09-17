@@ -1,0 +1,24 @@
+# Evaluation phrase set — Phase 0 / used across Phase 9 experiments (S1 vs S4, noise sensitivity, H2).
+# Lowercase, letters + spaces only (matches the keyboard_layout.json key set: no punctuation keys yet).
+# Representative of short AAC communication needs. Starter set — extend as needed before Phase 9,
+# but keep the set FIXED once experiments begin so S1 and S4 are compared on identical phrases.
+i am hungry
+i need water
+can you help me
+thank you very much
+how are you today
+i want to go outside
+please open the door
+i am feeling tired
+turn on the light
+what time is it
+i love my family
+can we watch tv
+i need the bathroom
+please call the doctor
+i am in pain
+good morning everyone
+see you later
+i am happy today
+please bring my medicine
+let us go for a walk

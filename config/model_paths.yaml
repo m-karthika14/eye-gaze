@@ -1,0 +1,10 @@
+# Paths to model weights under /models. Files do not exist yet — populated in
+# Phase 1 (gaze model) and Phase 4 (character-level LM).
+
+gaze_model:
+  path: "models/gaze_model.pt"
+  architecture: "full_face_cnn"  # iTracker / full-face-CNN lineage (pretrained, not trained from scratch)
+
+character_lm:
+  path: "models/char_lm.pt"
+  architecture: "gru"  # placeholder; finalized in Phase 4 (compact Transformer / GRU / n-gram)

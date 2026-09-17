@@ -1,0 +1,37 @@
+{
+  "description": "Static QWERTY keyboard layout for S0-S4 baselines. Coordinates are normalized to [0,1] over the keyboard canvas (x: left->right, y: top->bottom), matching the WebSocket gaze_x/gaze_y convention in MASTER_PROJECT_DOCUMENT.md Section 16. This layout is FIXED (not resized) for the S1-vs-S4 controlled comparison; the adaptive/merging keyboard (Phase 6) resizes these regions dynamically but starts from this base layout.",
+  "grid": { "columns": 10, "rows": 4, "col_width": 0.1, "row_height": 0.25 },
+  "keys": [
+    { "id": "Q", "label": "Q", "row": 0, "x": 0.00, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "W", "label": "W", "row": 0, "x": 0.10, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "E", "label": "E", "row": 0, "x": 0.20, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "R", "label": "R", "row": 0, "x": 0.30, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "T", "label": "T", "row": 0, "x": 0.40, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "Y", "label": "Y", "row": 0, "x": 0.50, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "U", "label": "U", "row": 0, "x": 0.60, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "I", "label": "I", "row": 0, "x": 0.70, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "O", "label": "O", "row": 0, "x": 0.80, "y": 0.00, "width": 0.10, "height": 0.25 },
+    { "id": "P", "label": "P", "row": 0, "x": 0.90, "y": 0.00, "width": 0.10, "height": 0.25 },
+
+    { "id": "A", "label": "A", "row": 1, "x": 0.05, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "S", "label": "S", "row": 1, "x": 0.15, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "D", "label": "D", "row": 1, "x": 0.25, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "F", "label": "F", "row": 1, "x": 0.35, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "G", "label": "G", "row": 1, "x": 0.45, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "H", "label": "H", "row": 1, "x": 0.55, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "J", "label": "J", "row": 1, "x": 0.65, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "K", "label": "K", "row": 1, "x": 0.75, "y": 0.25, "width": 0.10, "height": 0.25 },
+    { "id": "L", "label": "L", "row": 1, "x": 0.85, "y": 0.25, "width": 0.10, "height": 0.25 },
+
+    { "id": "Z", "label": "Z", "row": 2, "x": 0.15, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "X", "label": "X", "row": 2, "x": 0.25, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "C", "label": "C", "row": 2, "x": 0.35, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "V", "label": "V", "row": 2, "x": 0.45, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "B", "label": "B", "row": 2, "x": 0.55, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "N", "label": "N", "row": 2, "x": 0.65, "y": 0.50, "width": 0.10, "height": 0.25 },
+    { "id": "M", "label": "M", "row": 2, "x": 0.75, "y": 0.50, "width": 0.10, "height": 0.25 },
+
+    { "id": "SPACE", "label": "SPACE", "row": 3, "x": 0.15, "y": 0.75, "width": 0.55, "height": 0.25 },
+    { "id": "BACKSPACE", "label": "←", "row": 3, "x": 0.70, "y": 0.75, "width": 0.30, "height": 0.25 }
+  ]
+}

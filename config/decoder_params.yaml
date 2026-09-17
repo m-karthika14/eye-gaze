@@ -1,0 +1,27 @@
+# Placeholder decoder/gaze parameters — Phase 0 defaults, NOT yet tuned.
+# Real values are set empirically in Phase 3 (uncertainty calibration) and
+# Phase 10 (hyperparameter sweeps on the NVIDIA AI Factory).
+
+fixation:
+  # Temporal window used to aggregate raw 30fps gaze samples into one
+  # selection-event distribution (Section 8, Stage 2/4).
+  min_window_ms: 200
+  max_window_ms: 800
+
+gaze_uncertainty:
+  # Initial isotropic Gaussian sigma (normalized screen units) around the
+  # predicted gaze point, before post-hoc calibration (temperature scaling
+  # or empirical error modelling) is applied in Phase 3.
+  initial_sigma: 0.05
+  calibration_method: "temperature_scaling"  # placeholder; validated in Phase 3
+
+decoder:
+  # Joint noisy-channel decoder (S4): P(T|G) ~ P(G|T) * P(T)
+  beam_width: 8
+  # Relative weighting between gaze likelihood and language prior during
+  # beam search; 1.0 = unweighted noisy-channel product. Tuned in Phase 5/10.
+  lm_weight: 1.0
+
+fallback:
+  # Below this max key probability, do not force a selection (Phase 8).
+  min_confidence_threshold: 0.30

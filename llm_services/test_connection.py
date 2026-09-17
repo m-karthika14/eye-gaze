@@ -20,7 +20,9 @@ def main() -> int:
         reply = client.chat_completion(
             prompt="Reply with exactly the single word: OK",
             model=DEFAULT_SUGGESTION_MODEL,
-            max_tokens=5,
+            # gpt-oss models spend part of the token budget on hidden reasoning
+            # tokens before the visible answer; too tight a budget truncates to "".
+            max_tokens=50,
             temperature=0.0,
         )
     except Exception as exc:  # noqa: BLE001 - surface any SDK/network error plainly

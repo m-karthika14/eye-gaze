@@ -35,6 +35,7 @@ function App() {
               layout={layout}
               hoveredKey={message?.hovered_key ?? null}
               selectedKey={message?.selected_key ?? null}
+              dwellProgress={message?.dwell_progress ?? 0}
             />
             <GazeCursor x={message?.gaze_x ?? null} y={message?.gaze_y ?? null} />
           </>

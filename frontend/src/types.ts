@@ -24,6 +24,7 @@ export interface GazeMessage {
   confidence: number
   selected_key: string | null
   hovered_key: string | null
+  dwell_progress: number
   text: string
   error?: string
 }

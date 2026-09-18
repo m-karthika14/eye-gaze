@@ -14,14 +14,18 @@ half_fov_yaw_rad: 0.20   # initial horizontal range guess (~11deg); auto-expands
 half_fov_pitch_rad: 0.12 # initial vertical range guess (~7deg); auto-expands from real use
 invert_x: false          # flip if left/right feels mirrored on your setup
 invert_y: false
-smoothing_alpha: 0.8     # EMA smoothing on the normalized point; lower = smoother/laggier.
-                          # Kept high (fast) because dwell selection reads this same value: heavy
-                          # smoothing here makes the cursor visibly lag behind a fast saccade to an
-                          # edge key, and it can accumulate a full dwell on an intermediate key it's
-                          # passing through before ever reaching the real target. Dwell's 500ms hold
-                          # requirement already filters out fast jitter -- this only needs to take the
-                          # rawest edge off frame-to-frame noise, not add its own lag on top.
 startup_bias_frames: 20  # frames averaged at startup to auto-center the model's resting pitch/yaw bias
                           # (every appearance-based gaze model has one -- without this the mapped
                           # point can sit clamped at one screen edge regardless of real eye movement)
 max_range_rad: 0.9       # sanity cap on auto-expanded range, so a single noisy outlier can't blow it up
+
+# One Euro Filter (Casiez et al. 2012) -- replaces flat EMA smoothing. Adapts
+# its own smoothing to how fast the signal is moving: heavy smoothing while
+# fixating (low jitter, so dwell doesn't flicker between neighboring keys),
+# fast response while saccading (low lag, so dwell selection lands on the
+# real target instead of one it passed through on the way). If it still feels
+# laggy on fast glances, raise filter_beta; if the dot is jittery while
+# holding still, lower filter_min_cutoff.
+filter_min_cutoff: 1.0
+filter_beta: 3.0
+filter_d_cutoff: 1.0

@@ -1,12 +1,14 @@
 import type { KeyboardLayoutData } from '../types'
+import { DwellRing } from './DwellRing'
 
 interface Props {
   layout: KeyboardLayoutData
   hoveredKey: string | null
   selectedKey: string | null
+  dwellProgress: number
 }
 
-export function VirtualKeyboard({ layout, hoveredKey, selectedKey }: Props) {
+export function VirtualKeyboard({ layout, hoveredKey, selectedKey, dwellProgress }: Props) {
   return (
     <div className="relative h-full w-full">
       {layout.keys.map((key) => {
@@ -30,6 +32,7 @@ export function VirtualKeyboard({ layout, hoveredKey, selectedKey }: Props) {
             }}
           >
             {key.label}
+            {isHovered && <DwellRing progress={dwellProgress} />}
           </div>
         )
       })}

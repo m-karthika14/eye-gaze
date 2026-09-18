@@ -89,6 +89,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "confidence": sample["confidence"],
                     "selected_key": event.selected_key,
                     "hovered_key": event.hovered_key,
+                    "dwell_progress": event.dwell_progress,
                     "text": event.text,
                 }
             )

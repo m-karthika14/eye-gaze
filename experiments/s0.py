@@ -26,6 +26,7 @@ class S0Event:
     text: str
     selected_key: str | None
     hovered_key: str | None
+    dwell_progress: float  # 0..1, how far along the current hover is toward selecting
 
 
 class S0System:
@@ -43,7 +44,12 @@ class S0System:
         selected = self.dwell.update(key, timestamp)
         if selected is not None:
             self.buffer.apply_key(selected)
-        return S0Event(text=self.buffer.text, selected_key=selected, hovered_key=key)
+        return S0Event(
+            text=self.buffer.text,
+            selected_key=selected,
+            hovered_key=key,
+            dwell_progress=self.dwell.progress,
+        )
 
     def run_sequence(self, samples: Iterable[tuple[float | None, float | None, float]]) -> str:
         """samples: iterable of (gaze_x, gaze_y, timestamp_seconds). Returns

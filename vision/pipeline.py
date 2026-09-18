@@ -52,7 +52,7 @@ class GazePipeline:
                 }
                 continue
 
-            gaze_x, gaze_y = self.mapper.map(result.pitch, result.yaw)
+            gaze_x, gaze_y = self.mapper.map(result.pitch, result.yaw, timestamp=now)
             yield {
                 "gaze_x": gaze_x,
                 "gaze_y": gaze_y,

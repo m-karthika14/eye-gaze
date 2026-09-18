@@ -27,11 +27,21 @@ a screen edge once, that becomes the new reference and later glances there
 reach it correctly. The configured value is only the *initial* (and minimum)
 range; it grows, never shrinks, and is capped by `max_range_rad` against
 noise/outliers.
+
+Final-stage smoothing uses a One Euro Filter (Casiez et al. 2012) instead of
+a flat exponential moving average: a flat EMA forces one lag/jitter
+trade-off for both cases, but dwell selection reads this same output, so
+that's actually two different, conflicting needs -- stay put (low jitter)
+while fixating on a key, but arrive quickly (low lag) when saccading to a
+new one. One Euro Filter adapts its own smoothing to the signal's speed,
+giving both.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+
+from .one_euro_filter import OneEuroFilter
 
 
 @dataclass
@@ -40,9 +50,11 @@ class GazeMappingConfig:
     half_fov_pitch_rad: float = 0.19
     invert_x: bool = False
     invert_y: bool = False
-    smoothing_alpha: float = 0.35
     startup_bias_frames: int = 20  # ~1s at 20fps; averaged to auto-center the resting gaze bias
     max_range_rad: float = 0.9  # sanity cap on auto-expanded range, so one noisy outlier can't blow it up
+    filter_min_cutoff: float = 1.0  # One Euro Filter: lower = more smoothing at rest (less jitter)
+    filter_beta: float = 3.0  # One Euro Filter: higher = faster response during movement (less lag)
+    filter_d_cutoff: float = 1.0  # One Euro Filter: cutoff for the internal velocity estimate
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -62,19 +74,23 @@ class GazeToScreenMapper:
 
     def __init__(self, config: GazeMappingConfig | None = None) -> None:
         self.config = config or GazeMappingConfig()
-        self._smoothed_x: float | None = None
-        self._smoothed_y: float | None = None
         self._bias_pitch = 0.0
         self._bias_yaw = 0.0
         self._bias_samples: list[tuple[float, float]] = []
         self._bias_locked = False
         self._range_yaw = self.config.half_fov_yaw_rad
         self._range_pitch = self.config.half_fov_pitch_rad
+        self._filter_x = self._make_filter()
+        self._filter_y = self._make_filter()
+
+    def _make_filter(self) -> OneEuroFilter:
+        cfg = self.config
+        return OneEuroFilter(min_cutoff=cfg.filter_min_cutoff, beta=cfg.filter_beta, d_cutoff=cfg.filter_d_cutoff)
 
     def reset(self) -> None:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
-        self._smoothed_x = None
-        self._smoothed_y = None
+        self._filter_x.reset()
+        self._filter_y.reset()
 
     def recenter(self) -> None:
         """Re-run startup auto-centering and range expansion (e.g. if the user's setup changed)."""
@@ -85,7 +101,7 @@ class GazeToScreenMapper:
         self._range_yaw = self.config.half_fov_yaw_rad
         self._range_pitch = self.config.half_fov_pitch_rad
 
-    def map(self, pitch: float, yaw: float) -> tuple[float, float]:
+    def map(self, pitch: float, yaw: float, timestamp: float) -> tuple[float, float]:
         cfg = self.config
 
         if not self._bias_locked:
@@ -115,10 +131,6 @@ class GazeToScreenMapper:
             raw_x = min(max(raw_x, 0.0), 1.0)
             raw_y = min(max(raw_y, 0.0), 1.0)
 
-        if self._smoothed_x is None or self._smoothed_y is None:
-            self._smoothed_x, self._smoothed_y = raw_x, raw_y
-        else:
-            a = cfg.smoothing_alpha
-            self._smoothed_x = a * raw_x + (1 - a) * self._smoothed_x
-            self._smoothed_y = a * raw_y + (1 - a) * self._smoothed_y
-        return self._smoothed_x, self._smoothed_y
+        smoothed_x = self._filter_x.filter(timestamp, raw_x)
+        smoothed_y = self._filter_y.filter(timestamp, raw_y)
+        return smoothed_x, smoothed_y

@@ -18,17 +18,23 @@ class DwellDetector:
         self._current_key: str | None = None
         self._since: float | None = None  # timestamp (s) the current key hover started
         self._fired_for: str | None = None  # avoid re-firing repeatedly while still hovering
+        self._last_timestamp: float | None = None
 
     def reset(self) -> None:
         self._current_key = None
         self._since = None
         self._fired_for = None
+        self._last_timestamp = None
 
     def update(self, key: str | None, timestamp: float) -> str | None:
         """Feed one (key, timestamp) sample; timestamp in seconds (monotonic
         or wall-clock, just needs to be consistent within a run). Returns the
-        key id the instant its dwell threshold is crossed, else None.
+        key id the instant its dwell threshold is crossed, else None. Use
+        `.progress` after calling this for how far along the current hover is
+        (for a dwell-progress UI indicator).
         """
+        self._last_timestamp = timestamp
+
         if key != self._current_key:
             self._current_key = key
             self._since = timestamp
@@ -43,3 +49,12 @@ class DwellDetector:
             self._fired_for = key
             return key
         return None
+
+    @property
+    def progress(self) -> float:
+        """Fraction (0..1) of dwell_ms elapsed on the currently hovered key,
+        as of the last update() call. 0 if not currently hovering a key."""
+        if self._current_key is None or self._since is None or self._last_timestamp is None:
+            return 0.0
+        elapsed_ms = (self._last_timestamp - self._since) * 1000.0
+        return min(max(elapsed_ms / self.dwell_ms, 0.0), 1.0)

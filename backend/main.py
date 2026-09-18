@@ -24,10 +24,11 @@ from vision.pipeline import GazePipeline
 
 app = FastAPI(title="Calibration-Free Gaze Typing -- Backend")
 
-# Dev-only: Vite's default port. Tighten this before any real deployment.
+# Dev-only: matches any localhost/127.0.0.1 port, since Vite auto-increments
+# past 5173 if that port's already taken. Tighten this before any real deployment.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )

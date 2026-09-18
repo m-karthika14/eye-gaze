@@ -3,9 +3,11 @@ frontend (Phase 2 deliverable). Wire protocol extends
 MASTER_PROJECT_DOCUMENT.md Section 16 with "text" and "hovered_key" fields
 carrying the live S0 decoder state.
 
-Run from the repo root:
+Run from the repo root (no --reload: this server holds the webcam open for
+the duration of a connection, and hot-reloading mid-connection tears it down
+abruptly -- restart manually after code changes instead):
 
-    .venv/Scripts/python.exe -m uvicorn backend.main:app --reload --port 8000
+    .venv/Scripts/python.exe -m uvicorn backend.main:app --port 8000
 """
 
 from __future__ import annotations

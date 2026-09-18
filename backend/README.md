@@ -5,8 +5,13 @@ Python 3.11+, FastAPI, WebSockets. Streams real-time gaze data and S0 decoding f
 ## Run
 
 ```
-.venv/Scripts/python.exe -m uvicorn backend.main:app --reload --port 8000
+.venv/Scripts/python.exe -m uvicorn backend.main:app --port 8000
 ```
+
+Deliberately no `--reload`: this server holds the webcam open for the
+duration of a WebSocket connection, and hot-reloading mid-connection tears
+down the camera and socket abruptly. After editing `/vision`, `/decoder`, or
+`/backend`, stop it (Ctrl+C) and restart manually.
 
 ## Endpoints
 

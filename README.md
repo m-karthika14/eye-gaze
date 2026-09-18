@@ -37,12 +37,17 @@ Each folder has its own `README.md` describing its role and current phase status
 
 3. **Run the S0 baseline** (backend + frontend, two terminals):
    ```
-   .venv/Scripts/python.exe -m uvicorn backend.main:app --reload --port 8000
+   .venv/Scripts/python.exe -m uvicorn backend.main:app --port 8000
    ```
    ```
    cd frontend && npm install && npm run dev
    ```
    Open `http://localhost:5173`. Look at a key and dwell ~500ms to type it.
+
+   Note: no `--reload` -- this server holds the webcam open, and hot-reloading
+   mid-connection (e.g. after editing a `/vision`, `/decoder`, or `/backend`
+   file) tears down the camera and WebSocket abruptly. After any code change,
+   stop it (Ctrl+C) and restart manually instead.
 
 ## Project status
 

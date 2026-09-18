@@ -14,7 +14,13 @@ half_fov_yaw_rad: 0.20   # initial horizontal range guess (~11deg); auto-expands
 half_fov_pitch_rad: 0.12 # initial vertical range guess (~7deg); auto-expands from real use
 invert_x: false          # flip if left/right feels mirrored on your setup
 invert_y: false
-smoothing_alpha: 0.35    # EMA smoothing on the normalized point; lower = smoother/laggier
+smoothing_alpha: 0.8     # EMA smoothing on the normalized point; lower = smoother/laggier.
+                          # Kept high (fast) because dwell selection reads this same value: heavy
+                          # smoothing here makes the cursor visibly lag behind a fast saccade to an
+                          # edge key, and it can accumulate a full dwell on an intermediate key it's
+                          # passing through before ever reaching the real target. Dwell's 500ms hold
+                          # requirement already filters out fast jitter -- this only needs to take the
+                          # rawest edge off frame-to-frame noise, not add its own lag on top.
 startup_bias_frames: 20  # frames averaged at startup to auto-center the model's resting pitch/yaw bias
                           # (every appearance-based gaze model has one -- without this the mapped
                           # point can sit clamped at one screen edge regardless of real eye movement)

@@ -38,6 +38,7 @@ class GroqClient:
         system: str | None = None,
         max_tokens: int = 256,
         temperature: float = 0.3,
+        timeout: float | None = None,
     ) -> str:
         messages = []
         if system:
@@ -49,5 +50,6 @@ class GroqClient:
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout=timeout,
         )
         return response.choices[0].message.content or ""

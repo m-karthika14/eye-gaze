@@ -51,11 +51,12 @@ Each folder has its own `README.md` describing its role and current phase status
 
 ## Project status
 
-Phases 0-3 complete:
+Phases 0-4 complete:
 
 - **Phase 0** — specification frozen, repo skeleton, Groq connectivity verified end to end.
 - **Phase 1** — webcam capture, face detection + pretrained full-face gaze CNN (`uniface`: RetinaFace + MobileGaze), heuristic calibration-free pitch/yaw → screen-point mapping, live debug visualizer (`vision/run_demo.py`).
 - **Phase 2** — S0 baseline: nearest-key hard selection + dwell detection + text buffer (`/decoder`, `/experiments/s0.py`), FastAPI WebSocket server (`/backend`), React keyboard UI (`/frontend`). Verified end to end against the live camera.
 - **Phase 3** — uncertainty modelling: `vision/fixation.py` groups raw samples into a fixation window and estimates `(mu, sigma)` from real scatter; `decoder/key_probability.py` integrates that Gaussian over the keyboard into a full per-key probability distribution (visualized live in the frontend as a purple heatmap, additive alongside S0 -- not yet consumed for selection). `experiments/calibrate_uncertainty.py` has been run against real data: the mapping range was re-derived from real gaze angles, and `sigma_scale=24.45` is a real (large) measurement of webcam gaze imprecision -- not a bug, and exactly what Phase 5's joint decoder is designed to work with.
+- **Phase 4** — the two language components: `decoder/char_lm.py`, a local deterministic order-4 character n-gram LM trained on NLTK's Gutenberg corpus (held-out perplexity 5.17, weights committed at `models/char_lm.json`) for Phase 5's decoder; `llm_services/word_suggestions.py`, a Groq-backed whole-word completion suggester (cached, with a local-vocabulary fallback) for the product UI. Both verified independently -- the char LM via synthetic checks, the Groq suggester via live API calls (e.g. `"hel"` → `["help", "hello"]`).
 
-Next: **Phase 4 — Language Model Layer** (local character LM + Groq word suggestions). See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.
+Next: **Phase 5 — Joint Decoder (S4) & Ablation Ladder (S1–S3)**. See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.

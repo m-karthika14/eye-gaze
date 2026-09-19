@@ -1,10 +1,13 @@
-# Paths to model weights under /models. Files do not exist yet — populated in
-# Phase 1 (gaze model) and Phase 4 (character-level LM).
+# Paths to model weights.
 
 gaze_model:
-  path: "models/gaze_model.pt"
+  # Managed by uniface (Phase 1), not stored under /models -- it downloads
+  # RetinaFace + MobileGaze into its own cache on first use (see
+  # vision/face_gaze.py and /vision's README). Nothing to point to here.
   architecture: "full_face_cnn"  # iTracker / full-face-CNN lineage (pretrained, not trained from scratch)
+  managed_by: "uniface"
 
 character_lm:
-  path: "models/char_lm.pt"
-  architecture: "gru"  # placeholder; finalized in Phase 4 (compact Transformer / GRU / n-gram)
+  path: "models/char_lm.json"
+  architecture: "ngram"  # order-4 interpolated character n-gram (decoder/char_lm.py, Phase 4)
+  trained_by: "decoder/train_char_lm.py"

@@ -21,6 +21,8 @@ from pathlib import Path
 ALPHABET = "abcdefghijklmnopqrstuvwxyz "
 VOCAB_SIZE = len(ALPHABET)  # 27
 
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "char_lm.json"
+
 ORDER = 4  # context length + 1 (i.e. 3 preceding characters -> next char)
 # Interpolation weights for orders 4,3,2,1 (context lengths 3,2,1,0), highest
 # order weighted most but never trusted exclusively. Sums to 1.0.
@@ -111,3 +113,13 @@ class CharLM:
             for ctx, counter in ctx_counts.items():
                 lm.counts[k][ctx] = Counter(counter)
         return lm
+
+    @classmethod
+    def load_default(cls) -> "CharLM":
+        """Loads the trained model at models/char_lm.json (decoder/train_char_lm.py)."""
+        if not DEFAULT_MODEL_PATH.exists():
+            raise FileNotFoundError(
+                f"{DEFAULT_MODEL_PATH} not found -- run: "
+                ".venv/Scripts/python.exe -m decoder.train_char_lm"
+            )
+        return cls.load(DEFAULT_MODEL_PATH)

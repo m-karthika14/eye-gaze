@@ -95,6 +95,14 @@ class GazeToScreenMapper:
         cfg = self.config
         return OneEuroFilter(min_cutoff=cfg.filter_min_cutoff, beta=cfg.filter_beta, d_cutoff=cfg.filter_d_cutoff)
 
+    @property
+    def bias_locked(self) -> bool:
+        """True once the startup auto-center has finished (see module
+        docstring). Before this, map() reports a placeholder center point --
+        callers that need real measurements (e.g. calibration) should wait
+        for this to flip True before recording anything."""
+        return self._bias_locked
+
     def reset(self) -> None:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
         self._filter_x.reset()

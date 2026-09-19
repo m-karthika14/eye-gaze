@@ -4,11 +4,15 @@ against known targets, instead of trusting the raw temporal scatter blindly.
 Shows a sequence of keys on screen, one at a time, and asks you to look at
 each. Once your gaze settles into a stable fixation, records the predicted
 (mu, sigma) against the key's known true center. After all trials, computes
-how well sigma matches your ACTUAL error -- if a Gaussian's sigma is
-well-calibrated, the normalized error z = (mu - true) / sigma should have
-mean(z^2) ~= 1 across many trials (the standard variance-calibration check).
-Writes the resulting correction factor back into
+how well sigma matches your ACTUAL error using a robust (median-based)
+statistic -- see analyze()'s docstring for why mean(z^2) alone is the wrong
+tool here. Writes the resulting correction factor back into
 config/decoder_params.yaml's gaze_uncertainty.sigma_scale.
+
+Waits for the pipeline's startup bias-lock to finish before recording any
+trial (vision/gaze_to_screen.py reports a placeholder center point with
+exactly-zero scatter during that ~1s window -- recording through it produces
+fake "trials" that are actually measuring nothing).
 
 Run from the repo root (only one process can hold the webcam -- make sure
 the backend isn't running):
@@ -19,8 +23,8 @@ the backend isn't running):
 from __future__ import annotations
 
 import json
-import math
 import random
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -69,6 +73,31 @@ def draw_prompt(layout: KeyboardLayout, target_id: str, status: str) -> np.ndarr
     return canvas
 
 
+def warm_up(pipeline: GazePipeline) -> bool:
+    """Consume frames until the mapper's startup bias-lock completes. Before
+    that, map() reports a placeholder center point with zero scatter --
+    recording through it produces fake trials. Returns False if 'q' was
+    pressed or the stream ended before warm-up finished.
+    """
+    for sample in pipeline.stream():
+        canvas = np.zeros((*CANVAS_SIZE, 3), dtype=np.uint8)
+        cv2.putText(
+            canvas,
+            "Warming up -- look at the screen...",
+            (20, CANVAS_SIZE[0] // 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (0, 255, 255),
+            2,
+        )
+        cv2.imshow("Uncertainty calibration", canvas)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            return False
+        if pipeline.mapper.bias_locked:
+            return True
+    return False
+
+
 def run_trials(layout: KeyboardLayout) -> list[dict]:
     pipeline = GazePipeline(camera_index=0, target_fps=30)
     samples: list[dict] = []
@@ -77,6 +106,10 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
     random.shuffle(trial_order)
 
     with pipeline:
+        if not warm_up(pipeline):
+            cv2.destroyAllWindows()
+            return samples
+
         for target_id in trial_order:
             target_key = next(k for k in layout.keys if k.id == target_id)
             true_cx, true_cy = target_key.center()
@@ -123,27 +156,46 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
     return samples
 
 
+# For Z ~ N(0, 1), median(|Z|) = 0.6745 (the 75th-percentile point of the
+# standard normal). This is the standard median-absolute-deviation robust
+# scale estimator: unlike mean(z^2), which squares every error and lets one
+# or two bad trials (a blink, a momentary tracking glitch, a wrong key
+# looked at) dominate the whole result, the median only cares about the
+# typical trial and barely moves if a handful are way off.
+MEDIAN_ABS_Z_STANDARD_NORMAL = 0.6745
+
+
 def analyze(samples: list[dict], min_sigma: float) -> float:
-    """Returns sigma_scale so that mean(z^2) ~= 1, where z = (mu - true) / (sigma * scale)."""
-    z_squared: list[float] = []
+    """Returns sigma_scale such that (mu - true) / (sigma * scale) behaves
+    like a standard normal across trials, estimated robustly via the median
+    of |z| rather than the mean of z^2."""
+    z_abs: list[float] = []
     for s in samples:
         sigma_x = max(s["sigma_x"], min_sigma)
         sigma_y = max(s["sigma_y"], min_sigma)
-        z_squared.append(((s["mu_x"] - s["true_x"]) / sigma_x) ** 2)
-        z_squared.append(((s["mu_y"] - s["true_y"]) / sigma_y) ** 2)
+        z_abs.append(abs((s["mu_x"] - s["true_x"]) / sigma_x))
+        z_abs.append(abs((s["mu_y"] - s["true_y"]) / sigma_y))
 
-    mean_z_sq = sum(z_squared) / len(z_squared)
-    sigma_scale = math.sqrt(mean_z_sq)
+    median_abs_z = statistics.median(z_abs)
+    sigma_scale = median_abs_z / MEDIAN_ABS_Z_STANDARD_NORMAL
+
+    # Still surface the mean(z^2) view for comparison -- a big gap between
+    # the two numbers itself tells you outliers are driving the naive stat.
+    mean_z_sq = sum(z * z for z in z_abs) / len(z_abs)
+    naive_scale = mean_z_sq**0.5
 
     print()
-    print(f"[analysis] {len(samples)} trials, mean(z^2) = {mean_z_sq:.3f} (1.0 = perfectly calibrated)")
-    if mean_z_sq > 1.3:
+    print(f"[analysis] {len(samples)} trials")
+    print(f"[analysis] robust (median-based) sigma_scale = {sigma_scale:.3f}")
+    print(f"[analysis] naive (mean(z^2)-based) sigma_scale = {naive_scale:.3f}  (for comparison)")
+    if naive_scale > sigma_scale * 1.5:
+        print("[analysis] naive stat is much larger than the robust one -- a few outlier trials are dominating it")
+    if sigma_scale > 1.3:
         print("[analysis] raw sigma UNDERESTIMATES real error -- scaling it up")
-    elif mean_z_sq < 0.7:
+    elif sigma_scale < 0.7:
         print("[analysis] raw sigma OVERESTIMATES real error -- scaling it down")
     else:
         print("[analysis] raw sigma is reasonably well-calibrated already")
-    print(f"[analysis] computed sigma_scale = {sigma_scale:.3f}")
     return sigma_scale
 
 

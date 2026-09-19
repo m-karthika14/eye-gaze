@@ -1,34 +1,12 @@
-# Placeholder decoder/gaze parameters — Phase 0 defaults, NOT yet tuned.
-# Real values are set empirically in Phase 3 (uncertainty calibration) and
-# Phase 10 (hyperparameter sweeps on the NVIDIA AI Factory).
-
 fixation:
-  # Temporal window used to aggregate raw 30fps gaze samples into one
-  # selection-event distribution (Section 8, Stage 2/4).
   min_window_ms: 200
   max_window_ms: 800
-
 gaze_uncertainty:
-  # sigma_x/sigma_y come from vision/fixation.py's per-fixation temporal
-  # scatter (empirical, not a fixed global guess). min_sigma floors it so a
-  # near-perfectly-still fixation with very few samples doesn't collapse the
-  # distribution to one key with false certainty.
   min_sigma: 0.01
-  # Multiplicative correction applied to the raw temporal-scatter sigma:
-  # calibrated_sigma = raw_sigma * sigma_scale. 1.0 = trust the raw scatter
-  # as-is. Set by experiments/calibrate_uncertainty.py against real look-at-
-  # known-key trials -- do not hand-tune this without real data (Phase 3
-  # success criterion: sigma must be checked empirically, not assumed).
-  sigma_scale: 1.0
-  calibrated: false  # flips to true once calibrate_uncertainty.py has been run
-
+  sigma_scale: 21.4224
+  calibrated: true
 decoder:
-  # Joint noisy-channel decoder (S4): P(T|G) ~ P(G|T) * P(T)
   beam_width: 8
-  # Relative weighting between gaze likelihood and language prior during
-  # beam search; 1.0 = unweighted noisy-channel product. Tuned in Phase 5/10.
   lm_weight: 1.0
-
 fallback:
-  # Below this max key probability, do not force a selection (Phase 8).
-  min_confidence_threshold: 0.30
+  min_confidence_threshold: 0.3

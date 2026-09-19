@@ -115,12 +115,49 @@ def check_calibration_analysis_recovers_scale() -> bool:
     return True
 
 
+def check_calibration_robust_to_outliers() -> bool:
+    """A couple of wild outlier trials (blink, wrong key looked at) should
+    barely move the robust (median-based) sigma_scale, unlike a naive
+    mean(z^2) statistic which would be dominated by them."""
+    random.seed(3)
+    true_extra_scale = 1.5
+    samples = []
+    for _ in range(30):
+        true_x, true_y = random.uniform(0.1, 0.9), random.uniform(0.1, 0.9)
+        raw_sigma = 0.02
+        actual_error_sigma = raw_sigma * true_extra_scale
+        mu_x = true_x + random.gauss(0, actual_error_sigma)
+        mu_y = true_y + random.gauss(0, actual_error_sigma)
+        samples.append(
+            {"true_x": true_x, "true_y": true_y, "mu_x": mu_x, "mu_y": mu_y, "sigma_x": raw_sigma, "sigma_y": raw_sigma}
+        )
+
+    scale_clean = analyze(samples, min_sigma=0.01)
+
+    # Inject 2 wild outliers among the 30 clean trials (~7%) -- e.g. the
+    # tracker briefly locked onto a blink, or the wrong key was looked at.
+    outliers = [
+        {"true_x": 0.1, "true_y": 0.1, "mu_x": 0.9, "mu_y": 0.9, "sigma_x": 0.02, "sigma_y": 0.02},
+        {"true_x": 0.9, "true_y": 0.1, "mu_x": 0.1, "mu_y": 0.9, "sigma_x": 0.02, "sigma_y": 0.02},
+    ]
+    scale_with_outliers = analyze(samples + outliers, min_sigma=0.01)
+
+    drift = abs(scale_with_outliers - scale_clean)
+    if drift > 0.5:
+        print(f"[FAIL] robust scale moved too much from outliers: {scale_clean:.3f} -> {scale_with_outliers:.3f}")
+        return False
+    print(f"[OK] robust sigma_scale barely moves with 2 wild outliers among 30 trials: "
+          f"{scale_clean:.3f} -> {scale_with_outliers:.3f}")
+    return True
+
+
 def main() -> int:
     checks = [
         check_fixation_recovers_noise,
         check_fixation_resets_on_saccade_and_loss,
         check_key_probabilities_shape,
         check_calibration_analysis_recovers_scale,
+        check_calibration_robust_to_outliers,
     ]
     results = [check() for check in checks]
     if all(results):

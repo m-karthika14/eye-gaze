@@ -12,4 +12,6 @@ Dataset processing, evaluation data, and simulation outputs.
 
 Raw and processed data are git-ignored (see root `.gitignore`) — this folder holds processing scripts, not the datasets themselves. See `config/evaluation_phrases.txt` for the current evaluation phrase set (Phase 0).
 
-**Status:** empty. Populated starting **Phase 1** (gaze datasets) and **Phase 3–4** (validation/text corpus).
+`experiments/calibrate_uncertainty.py` (Phase 3) writes its recorded trials to `data/uncertainty_calibration_samples.jsonl` — also git-ignored, since it's personal to one person's camera/screen setup and meant to be regenerated, not version-controlled.
+
+**Status:** empty (aside from git-ignored generated files). Populated starting **Phase 1** (gaze datasets) and **Phase 3–4** (validation/text corpus).

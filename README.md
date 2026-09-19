@@ -51,10 +51,11 @@ Each folder has its own `README.md` describing its role and current phase status
 
 ## Project status
 
-Phases 0-2 complete:
+Phases 0-3 complete:
 
 - **Phase 0** — specification frozen, repo skeleton, Groq connectivity verified end to end.
 - **Phase 1** — webcam capture, face detection + pretrained full-face gaze CNN (`uniface`: RetinaFace + MobileGaze), heuristic calibration-free pitch/yaw → screen-point mapping, live debug visualizer (`vision/run_demo.py`).
 - **Phase 2** — S0 baseline: nearest-key hard selection + dwell detection + text buffer (`/decoder`, `/experiments/s0.py`), FastAPI WebSocket server (`/backend`), React keyboard UI (`/frontend`). Verified end to end against the live camera.
+- **Phase 3** — uncertainty modelling: `vision/fixation.py` groups raw samples into a fixation window and estimates `(mu, sigma)` from real scatter; `decoder/key_probability.py` integrates that Gaussian over the keyboard into a full per-key probability distribution (visualized live in the frontend as a purple heatmap, additive alongside S0 -- not yet consumed for selection). **`experiments/calibrate_uncertainty.py` still needs to be run against real data** to empirically validate sigma before Phase 5 can trust it.
 
-Next: **Phase 3 — Uncertainty Modelling & Calibration**. See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.
+Next: **Phase 4 — Language Model Layer** (local character LM + Groq word suggestions). See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.

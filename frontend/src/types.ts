@@ -18,6 +18,15 @@ export interface KeyboardLayoutData {
   keys: KeyDef[]
 }
 
+export interface FixationInfo {
+  mu_x: number
+  mu_y: number
+  sigma_x: number
+  sigma_y: number
+  n_samples: number
+  duration_ms: number
+}
+
 export interface GazeMessage {
   gaze_x: number | null
   gaze_y: number | null
@@ -26,5 +35,7 @@ export interface GazeMessage {
   hovered_key: string | null
   dwell_progress: number
   text: string
+  fixation: FixationInfo | null
+  key_probabilities: Record<string, number> | null
   error?: string
 }

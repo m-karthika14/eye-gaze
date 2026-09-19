@@ -9,11 +9,18 @@ fixation:
   max_window_ms: 800
 
 gaze_uncertainty:
-  # Initial isotropic Gaussian sigma (normalized screen units) around the
-  # predicted gaze point, before post-hoc calibration (temperature scaling
-  # or empirical error modelling) is applied in Phase 3.
-  initial_sigma: 0.05
-  calibration_method: "temperature_scaling"  # placeholder; validated in Phase 3
+  # sigma_x/sigma_y come from vision/fixation.py's per-fixation temporal
+  # scatter (empirical, not a fixed global guess). min_sigma floors it so a
+  # near-perfectly-still fixation with very few samples doesn't collapse the
+  # distribution to one key with false certainty.
+  min_sigma: 0.01
+  # Multiplicative correction applied to the raw temporal-scatter sigma:
+  # calibrated_sigma = raw_sigma * sigma_scale. 1.0 = trust the raw scatter
+  # as-is. Set by experiments/calibrate_uncertainty.py against real look-at-
+  # known-key trials -- do not hand-tune this without real data (Phase 3
+  # success criterion: sigma must be checked empirically, not assumed).
+  sigma_scale: 1.0
+  calibrated: false  # flips to true once calibrate_uncertainty.py has been run
 
 decoder:
   # Joint noisy-channel decoder (S4): P(T|G) ~ P(G|T) * P(T)

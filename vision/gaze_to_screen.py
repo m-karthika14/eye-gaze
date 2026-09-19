@@ -45,6 +45,14 @@ from .one_euro_filter import OneEuroFilter
 
 
 @dataclass
+class MappedGaze:
+    raw_x: float  # pre-filter -- feed this to FixationAggregator for uncertainty estimation
+    raw_y: float
+    smoothed_x: float  # post-One-Euro-Filter -- use for cursor display and S0's dwell mechanic
+    smoothed_y: float
+
+
+@dataclass
 class GazeMappingConfig:
     half_fov_yaw_rad: float = 0.33
     half_fov_pitch_rad: float = 0.19
@@ -101,7 +109,7 @@ class GazeToScreenMapper:
         self._range_yaw = self.config.half_fov_yaw_rad
         self._range_pitch = self.config.half_fov_pitch_rad
 
-    def map(self, pitch: float, yaw: float, timestamp: float) -> tuple[float, float]:
+    def map(self, pitch: float, yaw: float, timestamp: float) -> MappedGaze:
         cfg = self.config
 
         if not self._bias_locked:
@@ -133,4 +141,4 @@ class GazeToScreenMapper:
 
         smoothed_x = self._filter_x.filter(timestamp, raw_x)
         smoothed_y = self._filter_y.filter(timestamp, raw_y)
-        return smoothed_x, smoothed_y
+        return MappedGaze(raw_x=raw_x, raw_y=raw_y, smoothed_x=smoothed_x, smoothed_y=smoothed_y)

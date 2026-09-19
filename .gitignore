@@ -31,6 +31,7 @@ models/*.safetensors
 data/raw/
 data/processed/
 data/simulation_outputs/
+data/*.jsonl  # e.g. per-user uncertainty calibration samples -- personal to one setup, regenerate as needed
 
 # --- Experiment outputs ---
 experiments/**/results/

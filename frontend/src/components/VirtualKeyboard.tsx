@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import type { KeyboardLayoutData } from '../types'
+import type { KeyboardLayoutData, KeyGeometry } from '../types'
 import { DwellRing } from './DwellRing'
 
 interface Props {
@@ -8,9 +8,19 @@ interface Props {
   selectedKey: string | null
   dwellProgress: number
   keyProbabilities: Record<string, number> | null
+  keyLayoutOverride: Record<string, KeyGeometry> | null
+  spaceLabel: string | null
 }
 
-export function VirtualKeyboard({ layout, hoveredKey, selectedKey, dwellProgress, keyProbabilities }: Props) {
+export function VirtualKeyboard({
+  layout,
+  hoveredKey,
+  selectedKey,
+  dwellProgress,
+  keyProbabilities,
+  keyLayoutOverride,
+  spaceLabel,
+}: Props) {
   return (
     <div className="relative h-full w-full">
       {layout.keys.map((key) => {
@@ -20,21 +30,24 @@ export function VirtualKeyboard({ layout, hoveredKey, selectedKey, dwellProgress
         // Scaled up since mass is usually concentrated on a handful of keys
         // out of 28 -- a "fair" 1/28 share would otherwise look invisible.
         const heatAlpha = Math.min(prob * 6, 0.85)
+        const geometry = keyLayoutOverride?.[key.id] ?? key
 
         const style: CSSProperties = {
-          left: `${key.x * 100}%`,
-          top: `${key.y * 100}%`,
-          width: `${key.width * 100}%`,
-          height: `${key.height * 100}%`,
+          left: `${geometry.x * 100}%`,
+          top: `${geometry.y * 100}%`,
+          width: `${geometry.width * 100}%`,
+          height: `${geometry.height * 100}%`,
         }
         if (!isSelected && !isHovered && heatAlpha > 0.02) {
           style.backgroundColor = `rgba(168, 85, 247, ${heatAlpha})`
         }
 
+        const label = key.id === "SPACE" && spaceLabel ? spaceLabel : key.label
+
         return (
           <div
             key={key.id}
-            className={`absolute flex select-none items-center justify-center border border-slate-700 text-sm font-medium transition-colors duration-150 ${
+            className={`absolute flex select-none items-center justify-center overflow-hidden border border-slate-700 text-sm font-medium transition-all duration-200 ${
               isSelected
                 ? 'bg-emerald-400 text-slate-900'
                 : isHovered
@@ -43,7 +56,7 @@ export function VirtualKeyboard({ layout, hoveredKey, selectedKey, dwellProgress
             }`}
             style={style}
           >
-            {key.label}
+            {label}
             {isHovered && <DwellRing progress={dwellProgress} />}
           </div>
         )

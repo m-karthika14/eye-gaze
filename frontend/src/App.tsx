@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { GazeCursor } from './components/GazeCursor'
+import { SuggestionStrip } from './components/SuggestionStrip'
 import { TextDisplay } from './components/TextDisplay'
 import { VirtualKeyboard } from './components/VirtualKeyboard'
 import { useGazeSocket } from './hooks/useGazeSocket'
@@ -6,23 +8,41 @@ import { useKeyboardLayout } from './hooks/useKeyboardLayout'
 
 function App() {
   const { layout, error: layoutError } = useKeyboardLayout()
-  const { message, status, error: socketError } = useGazeSocket()
+  const { message, status, error: socketError, sendMessage } = useGazeSocket()
+  const [adaptiveEnabled, setAdaptiveEnabled] = useState(true)
+
+  function toggleAdaptive() {
+    const next = !adaptiveEnabled
+    setAdaptiveEnabled(next)
+    sendMessage({ adaptive_keyboard: next })
+  }
+
+  const suggestions = adaptiveEnabled ? (message?.suggestions ?? []) : []
+  const keyLayoutOverride = adaptiveEnabled ? (message?.key_layout ?? null) : null
+  const spaceLabel = suggestions.length > 0 ? `SPACE (${suggestions[0]})` : null
 
   return (
     <div className="flex min-h-screen flex-col items-center gap-6 bg-slate-950 p-6 text-slate-100">
       <header className="flex w-full max-w-4xl items-center justify-between">
-        <h1 className="text-lg font-semibold">Calibration-Free Gaze Typing -- S0 Baseline + Phase 3 Uncertainty</h1>
-        <span
-          className={`rounded-full px-2 py-1 text-xs ${
-            status === 'open' ? 'bg-emerald-700 text-emerald-100' : 'bg-amber-700 text-amber-100'
-          }`}
-        >
-          {status}
-        </span>
+        <h1 className="text-lg font-semibold">Calibration-Free Gaze Typing -- S0 Baseline + Phase 6 Adaptive Keyboard</h1>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-slate-400">
+            <input type="checkbox" checked={adaptiveEnabled} onChange={toggleAdaptive} />
+            adaptive keyboard
+          </label>
+          <span
+            className={`rounded-full px-2 py-1 text-xs ${
+              status === 'open' ? 'bg-emerald-700 text-emerald-100' : 'bg-amber-700 text-amber-100'
+            }`}
+          >
+            {status}
+          </span>
+        </div>
       </header>
 
-      <div className="w-full max-w-4xl">
+      <div className="w-full max-w-4xl space-y-2">
         <TextDisplay text={message?.text ?? ''} />
+        <SuggestionStrip suggestions={suggestions} />
       </div>
 
       {socketError && <p className="text-sm text-red-400">{socketError}</p>}
@@ -37,6 +57,8 @@ function App() {
               selectedKey={message?.selected_key ?? null}
               dwellProgress={message?.dwell_progress ?? 0}
               keyProbabilities={message?.key_probabilities ?? null}
+              keyLayoutOverride={keyLayoutOverride}
+              spaceLabel={spaceLabel}
             />
             <GazeCursor x={message?.gaze_x ?? null} y={message?.gaze_y ?? null} />
           </>
@@ -46,9 +68,10 @@ function App() {
       </div>
 
       <p className="max-w-4xl text-center text-sm text-slate-500">
-        Dwell on a key for ~500ms to select it. S0 baseline: no language correction, no adaptive resizing --
-        gaze straight to nearest key. The purple glow is Phase 3's per-key probability distribution (not yet
-        used for selection -- S1-S4 will consume it in Phase 5).
+        Dwell on a key for ~500ms to select it. {adaptiveEnabled
+          ? 'Adaptive keyboard on: keys resize by predicted likelihood, and SPACE accepts the top word suggestion.'
+          : 'Adaptive keyboard off: pure S0 baseline, static keyboard -- matches the S1-vs-S4 controlled comparison.'}
+        {' '}The purple glow is Phase 3's per-key probability distribution (not yet used for selection).
       </p>
 
       {message?.fixation && (

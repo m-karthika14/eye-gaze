@@ -1,7 +1,8 @@
-"""FastAPI + WebSocket server: streams live gaze + S0 decoding, plus Phase 3's
-fixation-aggregated key-probability distribution, to the frontend. Wire
-protocol extends MASTER_PROJECT_DOCUMENT.md Section 16 with "text",
-"hovered_key", "dwell_progress", and "fixation" fields alongside the
+"""FastAPI + WebSocket server: streams live gaze + S0 decoding, Phase 3's
+fixation-aggregated key-probability distribution, and Phase 6's adaptive
+keyboard + word suggestions, to the frontend. Wire protocol extends
+MASTER_PROJECT_DOCUMENT.md Section 16 with "text", "hovered_key",
+"dwell_progress", "fixation", "key_layout", and "suggestions" alongside the
 "key_probabilities" the section already specifies.
 
 Run from the repo root (no --reload: this server holds the webcam open for
@@ -22,9 +23,12 @@ import yaml
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.adaptive_layout import accept_suggestion, compute_adaptive_layout
+from decoder.char_lm import CharLM
 from decoder.key_probability import DEFAULT_MIN_SIGMA, key_probabilities
 from decoder.nearest_key import DEFAULT_LAYOUT_PATH, KeyboardLayout
-from experiments.s0 import S0System
+from experiments.s0 import S0Event, S0System
+from llm_services.word_suggestions import WordSuggester
 from vision.pipeline import GazePipeline
 
 DECODER_PARAMS_PATH = Path(__file__).resolve().parent.parent / "config" / "decoder_params.yaml"
@@ -41,6 +45,8 @@ app.add_middleware(
 )
 
 _layout = KeyboardLayout.from_json()
+_char_lm = CharLM.load_default()
+_word_suggester = WordSuggester()
 
 
 def _load_uncertainty_config() -> tuple[float, float]:
@@ -64,6 +70,10 @@ def keyboard_layout() -> dict:
     return json.loads(DEFAULT_LAYOUT_PATH.read_text(encoding="utf-8"))
 
 
+def _layout_payload(layout: KeyboardLayout) -> dict:
+    return {k.id: {"x": k.x, "y": k.y, "width": k.width, "height": k.height} for k in layout.keys}
+
+
 @app.websocket("/ws/gaze")
 async def ws_gaze(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -79,8 +89,32 @@ async def ws_gaze(websocket: WebSocket) -> None:
     loop = asyncio.get_event_loop()
     stream = pipeline.stream()
 
+    # Phase 6 state. adaptive_keyboard defaults on; the frontend can send
+    # {"adaptive_keyboard": false} at any point to fall back to the pure S0
+    # static-keyboard behaviour (e.g. for a live S1-vs-S4-style comparison).
+    settings = {"adaptive_keyboard": True}
+    last_layout_text: str | None = None
+    key_layout_payload: dict | None = None
+    suggestions: list[str] = []
+    suggestion_task: asyncio.Task | None = None
+    pending_prefix = ""
+
+    async def receive_control_messages() -> None:
+        try:
+            while True:
+                msg = await websocket.receive_json()
+                if "adaptive_keyboard" in msg:
+                    settings["adaptive_keyboard"] = bool(msg["adaptive_keyboard"])
+        except Exception:  # noqa: BLE001 -- connection closing; main loop exits too
+            pass
+
+    receiver_task = asyncio.create_task(receive_control_messages())
+
     def next_sample():
         return next(stream, None)
+
+    def fetch_suggestions(prefix: str, context: str) -> list[str]:
+        return _word_suggester.suggest(prefix, context, max_suggestions=3)
 
     try:
         while True:
@@ -96,7 +130,54 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 )
                 break
 
+            adaptive_on = settings["adaptive_keyboard"]
+            if not adaptive_on and s0.layout is not _layout:
+                s0.layout = _layout
+                last_layout_text = None
+                key_layout_payload = None
+
             event = s0.process_sample(sample["gaze_x"], sample["gaze_y"], time.monotonic())
+
+            if adaptive_on:
+                # SPACE accepts the top suggestion mid-word instead of a
+                # literal space -- the standard predictive-keyboard pattern,
+                # and the only gaze-driven way to accept a suggestion (see
+                # experiments/s1.py's sibling docstrings for why: adding a
+                # new gaze-interactive region would change calibrated
+                # geometry; reusing the existing SPACE key doesn't).
+                if event.selected_key == "SPACE" and suggestions and pending_prefix and suggestions[0] != pending_prefix:
+                    accept_suggestion(s0.buffer, pending_prefix, suggestions[0])
+                    event = S0Event(
+                        text=s0.buffer.text,
+                        selected_key="SPACE",
+                        hovered_key=event.hovered_key,
+                        dwell_progress=event.dwell_progress,
+                    )
+                    suggestions = []
+                    suggestion_task = None
+
+                if event.text != last_layout_text:
+                    s0.layout = compute_adaptive_layout(_layout, _char_lm, event.text)
+                    last_layout_text = event.text
+                    key_layout_payload = _layout_payload(s0.layout)
+
+                current_word = event.text.rsplit(" ", 1)[-1] if event.text else ""
+                if event.selected_key == "BACKSPACE":
+                    suggestions = []  # stale after an edit
+                if event.selected_key not in ("SPACE", "BACKSPACE", None) and current_word:
+                    if suggestion_task is None or suggestion_task.done():
+                        # run_in_executor already returns an awaitable Future
+                        # (not a coroutine) -- no create_task() wrapper needed.
+                        suggestion_task = loop.run_in_executor(None, fetch_suggestions, current_word, event.text)
+                if suggestion_task is not None and suggestion_task.done():
+                    try:
+                        suggestions = suggestion_task.result()
+                    except Exception:  # noqa: BLE001 -- a failed suggestion fetch just means no suggestions
+                        suggestions = []
+                pending_prefix = current_word
+            else:
+                key_layout_payload = None
+                suggestions = []
 
             fixation = sample.get("fixation")
             key_probs = None
@@ -130,9 +211,12 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "text": event.text,
                     "fixation": fixation_payload,
                     "key_probabilities": key_probs,
+                    "key_layout": key_layout_payload,
+                    "suggestions": suggestions,
                 }
             )
     except WebSocketDisconnect:
         pass
     finally:
+        receiver_task.cancel()
         pipeline.close()

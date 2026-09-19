@@ -27,6 +27,13 @@ export interface FixationInfo {
   duration_ms: number
 }
 
+export interface KeyGeometry {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface GazeMessage {
   gaze_x: number | null
   gaze_y: number | null
@@ -37,5 +44,7 @@ export interface GazeMessage {
   text: string
   fixation: FixationInfo | null
   key_probabilities: Record<string, number> | null
+  key_layout: Record<string, KeyGeometry> | null
+  suggestions: string[]
   error?: string
 }

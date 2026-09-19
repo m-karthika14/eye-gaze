@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BACKEND_WS } from '../config'
 import type { GazeMessage } from '../types'
 
@@ -16,16 +16,17 @@ export function useGazeSocket() {
   const [message, setMessage] = useState<GazeMessage | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    let ws: WebSocket | null = null
     let reconnectDelay = BASE_RECONNECT_DELAY_MS
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
     function connect() {
       if (cancelled) return
-      ws = new WebSocket(`${BACKEND_WS}/ws/gaze`)
+      const ws = new WebSocket(`${BACKEND_WS}/ws/gaze`)
+      wsRef.current = ws
 
       ws.onopen = () => {
         if (cancelled) return
@@ -61,9 +62,15 @@ export function useGazeSocket() {
     return () => {
       cancelled = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
-      ws?.close()
+      wsRef.current?.close()
     }
   }, [])
 
-  return { message, status, error }
+  const sendMessage = useCallback((data: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data))
+    }
+  }, [])
+
+  return { message, status, error, sendMessage }
 }

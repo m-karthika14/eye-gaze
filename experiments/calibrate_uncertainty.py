@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -40,6 +41,11 @@ CANVAS_SIZE = (720, 1280)  # h, w -- stand-in for "the screen", matches vision/r
 # A spread across the keyboard: corners, edges, center -- not all 28 keys,
 # just enough variety to characterize the error across the whole surface.
 TARGET_KEYS = ["Q", "P", "Z", "M", "D", "H", "A", "L", "T", "B", "SPACE", "BACKSPACE"]
+
+# Each target is visited this many times (in randomized order, not back to
+# back) so the estimate isn't skewed by one or two rough trials -- a handful
+# of trials per key is not enough to trust a single global scale factor from.
+REPEATS = 3
 
 TARGET_FIXATION_MS = 600.0  # how long we wait for a fixation to accumulate before recording it
 SETTLE_TIMEOUT_S = 8.0  # give up on a trial if no stable fixation forms in this long
@@ -67,8 +73,11 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
     pipeline = GazePipeline(camera_index=0, target_fps=30)
     samples: list[dict] = []
 
+    trial_order = TARGET_KEYS * REPEATS
+    random.shuffle(trial_order)
+
     with pipeline:
-        for target_id in TARGET_KEYS:
+        for target_id in trial_order:
             target_key = next(k for k in layout.keys if k.id == target_id)
             true_cx, true_cy = target_key.center()
 
@@ -77,7 +86,7 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
             for sample in pipeline.stream():
                 elapsed = time.monotonic() - trial_start
                 fixation = sample.get("fixation")
-                status = f"trial {len(samples) + 1}/{len(TARGET_KEYS)}  elapsed={elapsed:.1f}s"
+                status = f"trial {len(samples) + 1}/{len(trial_order)}  target={target_id}  elapsed={elapsed:.1f}s"
                 if fixation is not None:
                     status += f"  fixation={fixation.duration_ms:.0f}ms n={fixation.n_samples}"
 
@@ -150,7 +159,9 @@ def write_back(sigma_scale: float) -> None:
 def main() -> int:
     layout = KeyboardLayout.from_json()
 
-    print(f"Calibration: {len(TARGET_KEYS)} targets. Look at each highlighted key as it appears.")
+    total_trials = len(TARGET_KEYS) * REPEATS
+    print(f"Calibration: {len(TARGET_KEYS)} keys x {REPEATS} repeats = {total_trials} trials, randomized order.")
+    print("Look at each highlighted key as it appears.")
     print("Press 'q' at any point to stop early (uses whatever trials were collected so far).")
 
     try:
@@ -159,8 +170,8 @@ def main() -> int:
         print(f"[FAIL] {exc}")
         return 1
 
-    if len(samples) < 4:
-        print(f"[FAIL] only {len(samples)} usable trials -- need at least 4 for a meaningful estimate.")
+    if len(samples) < 8:
+        print(f"[FAIL] only {len(samples)} usable trials -- need at least 8 for a meaningful estimate.")
         return 1
 
     DATA_DIR.mkdir(exist_ok=True)

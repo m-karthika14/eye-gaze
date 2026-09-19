@@ -14,7 +14,8 @@
 half_fov_yaw_rad: 0.2968   # derived from real calibration data (was 0.20 initial guess)
 half_fov_pitch_rad: 0.25   # derived from real calibration data (was 0.12 initial guess)
 invert_x: false          # flip if left/right feels mirrored on your setup
-invert_y: false
+invert_y: true           # confirmed inverted on this setup (looking up moved the dot down) -- likely
+                          # webcam mounting/geometry specific to this person's setup, not a code bug
 startup_bias_frames: 20  # frames averaged at startup to auto-center the model's resting pitch/yaw bias
                           # (every appearance-based gaze model has one -- without this the mapped
                           # point can sit clamped at one screen edge regardless of real eye movement)

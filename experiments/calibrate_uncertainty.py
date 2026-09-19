@@ -37,6 +37,7 @@ from decoder.nearest_key import KeyboardLayout
 from vision.pipeline import GazePipeline
 
 DECODER_PARAMS_PATH = Path(__file__).resolve().parent.parent / "config" / "decoder_params.yaml"
+GAZE_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "gaze_mapping.yaml"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SAMPLES_PATH = DATA_DIR / "uncertainty_calibration_samples.jsonl"
 
@@ -140,6 +141,15 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
                             "sigma_x": fixation.sigma_x,
                             "sigma_y": fixation.sigma_y,
                             "n_samples": fixation.n_samples,
+                            # Raw angle + the range in use at trial time --
+                            # lets range_from_samples() reconstruct what range
+                            # WOULD have been needed to reach the true target,
+                            # without the information loss mu_x/mu_y suffer
+                            # once clamping kicks in near screen edges.
+                            "rel_yaw": pipeline.mapper.last_rel_yaw,
+                            "rel_pitch": pipeline.mapper.last_rel_pitch,
+                            "range_yaw": pipeline.mapper.range_yaw,
+                            "range_pitch": pipeline.mapper.range_pitch,
                         }
                     )
                     recorded = True
@@ -199,6 +209,36 @@ def analyze(samples: list[dict], min_sigma: float) -> float:
     return sigma_scale
 
 
+def analyze_range(samples: list[dict]) -> tuple[float, float] | None:
+    """Reconstructs the range (half_fov_yaw_rad/half_fov_pitch_rad) that
+    WOULD have mapped this person's actual observed gaze angle exactly onto
+    each trial's true target -- i.e. what the auto-expanding range in
+    vision/gaze_to_screen.py should have converged to, computed directly
+    instead of hoping the initial guess was already close enough for it to
+    trigger expansion from.
+
+    Uses rel_yaw/rel_pitch (the raw bias-corrected angle) rather than
+    mu_x/mu_y, since mu_x/mu_y are clamped to [0,1] and lose information
+    exactly on the corner cases we most need this to be accurate for.
+    Returns None if there isn't enough off-center data.
+    """
+    yaw_estimates, pitch_estimates = [], []
+    for s in samples:
+        if "rel_yaw" not in s:
+            continue  # samples recorded before this field existed
+        dx, dy = s["true_x"] - 0.5, s["true_y"] - 0.5
+        # Skip near-center targets -- dividing by a tiny dx/dy is unstable
+        # and a center-ish target doesn't meaningfully constrain the range.
+        if abs(dx) > 0.05:
+            yaw_estimates.append(abs(s["rel_yaw"]) / (2 * abs(dx)))
+        if abs(dy) > 0.05:
+            pitch_estimates.append(abs(s["rel_pitch"]) / (2 * abs(dy)))
+
+    if len(yaw_estimates) < 4 or len(pitch_estimates) < 4:
+        return None
+    return statistics.median(yaw_estimates), statistics.median(pitch_estimates)
+
+
 def write_back(sigma_scale: float) -> None:
     data = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
     data.setdefault("gaze_uncertainty", {})
@@ -206,6 +246,17 @@ def write_back(sigma_scale: float) -> None:
     data["gaze_uncertainty"]["calibrated"] = True
     DECODER_PARAMS_PATH.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     print(f"[OK] wrote sigma_scale={sigma_scale:.4f} to {DECODER_PARAMS_PATH}")
+
+
+def write_back_range(half_fov_yaw_rad: float, half_fov_pitch_rad: float) -> None:
+    data = yaml.safe_load(GAZE_MAPPING_PATH.read_text(encoding="utf-8")) or {}
+    data["half_fov_yaw_rad"] = round(half_fov_yaw_rad, 4)
+    data["half_fov_pitch_rad"] = round(half_fov_pitch_rad, 4)
+    GAZE_MAPPING_PATH.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    print(
+        f"[OK] wrote half_fov_yaw_rad={half_fov_yaw_rad:.4f}, "
+        f"half_fov_pitch_rad={half_fov_pitch_rad:.4f} to {GAZE_MAPPING_PATH}"
+    )
 
 
 def main() -> int:
@@ -231,6 +282,19 @@ def main() -> int:
         for s in samples:
             f.write(json.dumps(s) + "\n")
     print(f"[OK] saved {len(samples)} trials to {SAMPLES_PATH}")
+
+    range_result = analyze_range(samples)
+    if range_result is not None:
+        old_mapping = yaml.safe_load(GAZE_MAPPING_PATH.read_text(encoding="utf-8")) or {}
+        old_yaw = old_mapping.get("half_fov_yaw_rad")
+        old_pitch = old_mapping.get("half_fov_pitch_rad")
+        new_yaw, new_pitch = range_result
+        print()
+        print(f"[analysis] derived half_fov_yaw_rad={new_yaw:.4f} (was {old_yaw}), "
+              f"half_fov_pitch_rad={new_pitch:.4f} (was {old_pitch})")
+        write_back_range(new_yaw, new_pitch)
+    else:
+        print("[analysis] not enough off-center trials to derive a better range -- skipping")
 
     decoder_params = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
     min_sigma = float(decoder_params.get("gaze_uncertainty", {}).get("min_sigma", 0.01))

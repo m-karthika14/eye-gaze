@@ -88,6 +88,12 @@ class GazeToScreenMapper:
         self._bias_locked = False
         self._range_yaw = self.config.half_fov_yaw_rad
         self._range_pitch = self.config.half_fov_pitch_rad
+        # Last computed bias-corrected angle, pre-clamp -- exposed for
+        # diagnostics (e.g. experiments/calibrate_uncertainty.py reconstructs
+        # what range would have been needed to reach a known true target,
+        # which mu_x/mu_y alone can't give you once clamping has kicked in).
+        self._last_rel_yaw = 0.0
+        self._last_rel_pitch = 0.0
         self._filter_x = self._make_filter()
         self._filter_y = self._make_filter()
 
@@ -102,6 +108,26 @@ class GazeToScreenMapper:
         callers that need real measurements (e.g. calibration) should wait
         for this to flip True before recording anything."""
         return self._bias_locked
+
+    @property
+    def range_yaw(self) -> float:
+        """Current auto-expanded horizontal range (radians)."""
+        return self._range_yaw
+
+    @property
+    def range_pitch(self) -> float:
+        """Current auto-expanded vertical range (radians)."""
+        return self._range_pitch
+
+    @property
+    def last_rel_yaw(self) -> float:
+        """Most recent bias-corrected yaw (radians), pre-clamp."""
+        return self._last_rel_yaw
+
+    @property
+    def last_rel_pitch(self) -> float:
+        """Most recent bias-corrected pitch (radians), pre-clamp."""
+        return self._last_rel_pitch
 
     def reset(self) -> None:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
@@ -132,6 +158,8 @@ class GazeToScreenMapper:
         else:
             rel_pitch = pitch - self._bias_pitch
             rel_yaw = yaw - self._bias_yaw
+            self._last_rel_yaw = rel_yaw
+            self._last_rel_pitch = rel_pitch
 
             # Auto-expand the effective range toward whatever extremes we've
             # actually seen, capped against a single noisy outlier.

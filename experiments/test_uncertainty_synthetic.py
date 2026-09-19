@@ -14,7 +14,7 @@ import sys
 
 from decoder.key_probability import key_probabilities
 from decoder.nearest_key import KeyboardLayout
-from experiments.calibrate_uncertainty import analyze
+from experiments.calibrate_uncertainty import analyze, analyze_range
 from vision.fixation import FixationAggregator
 
 
@@ -151,6 +151,32 @@ def check_calibration_robust_to_outliers() -> bool:
     return True
 
 
+def check_analyze_range_recovers_true_range() -> bool:
+    """If a person's real yaw/pitch range differs from whatever the mapper's
+    current guess happens to be, analyze_range() should recover the REAL
+    range from (rel_yaw/rel_pitch, true_x/true_y) pairs, independent of that
+    guess -- this is what lets calibration fix a stuck-too-wide initial range
+    instead of only ever being able to widen it further."""
+    true_range_yaw, true_range_pitch = 0.15, 0.09
+    targets = [(0.05, 0.125), (0.95, 0.125), (0.05, 0.875), (0.95, 0.875), (0.5, 0.875), (0.05, 0.5)]
+    samples = []
+    for true_x, true_y in targets:
+        rel_yaw = (true_x - 0.5) * 2 * true_range_yaw
+        rel_pitch = -(true_y - 0.5) * 2 * true_range_pitch
+        samples.append({"true_x": true_x, "true_y": true_y, "rel_yaw": rel_yaw, "rel_pitch": rel_pitch})
+
+    result = analyze_range(samples)
+    if result is None:
+        print("[FAIL] analyze_range: expected a result, got None")
+        return False
+    recovered_yaw, recovered_pitch = result
+    if abs(recovered_yaw - true_range_yaw) > 1e-6 or abs(recovered_pitch - true_range_pitch) > 1e-6:
+        print(f"[FAIL] analyze_range: recovered {result} != true ({true_range_yaw}, {true_range_pitch})")
+        return False
+    print(f"[OK] analyze_range recovers the true range exactly: {result}")
+    return True
+
+
 def main() -> int:
     checks = [
         check_fixation_recovers_noise,
@@ -158,6 +184,7 @@ def main() -> int:
         check_key_probabilities_shape,
         check_calibration_analysis_recovers_scale,
         check_calibration_robust_to_outliers,
+        check_analyze_range_recovers_true_range,
     ]
     results = [check() for check in checks]
     if all(results):

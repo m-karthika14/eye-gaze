@@ -22,9 +22,14 @@ websockets
 # --- Phase 3: uncertainty modelling & decoder ---
 numpy
 scipy
+# Round-trip YAML (preserves comments) for calibrate_uncertainty.py's
+# config write-backs -- plain PyYAML's safe_dump silently drops them.
+ruamel.yaml
 
-# --- Phase 4: character-level LM (local) ---
-torch
+# --- Phase 4: language model layer ---
+# Local character-level LM (decoder/char_lm.py) is a pure-Python n-gram
+# model -- no ML framework needed. nltk supplies its training corpus.
+nltk
 
 # --- Phase 9: experiment analysis ---
 scikit-learn

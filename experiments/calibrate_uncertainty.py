@@ -31,10 +31,16 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import yaml
+from ruamel.yaml import YAML
 
 from decoder.nearest_key import KeyboardLayout
 from vision.pipeline import GazePipeline
+
+# Round-trip loader/dumper: preserves comments and formatting on write-back,
+# unlike plain PyYAML's safe_load/safe_dump which silently discards them --
+# these config files are hand-documented and get re-written by this script.
+yaml = YAML()
+yaml.preserve_quotes = True
 
 DECODER_PARAMS_PATH = Path(__file__).resolve().parent.parent / "config" / "decoder_params.yaml"
 GAZE_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "gaze_mapping.yaml"
@@ -240,19 +246,23 @@ def analyze_range(samples: list[dict]) -> tuple[float, float] | None:
 
 
 def write_back(sigma_scale: float) -> None:
-    data = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
+    with open(DECODER_PARAMS_PATH, encoding="utf-8") as f:
+        data = yaml.load(f)
     data.setdefault("gaze_uncertainty", {})
     data["gaze_uncertainty"]["sigma_scale"] = round(sigma_scale, 4)
     data["gaze_uncertainty"]["calibrated"] = True
-    DECODER_PARAMS_PATH.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    with open(DECODER_PARAMS_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
     print(f"[OK] wrote sigma_scale={sigma_scale:.4f} to {DECODER_PARAMS_PATH}")
 
 
 def write_back_range(half_fov_yaw_rad: float, half_fov_pitch_rad: float) -> None:
-    data = yaml.safe_load(GAZE_MAPPING_PATH.read_text(encoding="utf-8")) or {}
+    with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
+        data = yaml.load(f)
     data["half_fov_yaw_rad"] = round(half_fov_yaw_rad, 4)
     data["half_fov_pitch_rad"] = round(half_fov_pitch_rad, 4)
-    GAZE_MAPPING_PATH.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    with open(GAZE_MAPPING_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
     print(
         f"[OK] wrote half_fov_yaw_rad={half_fov_yaw_rad:.4f}, "
         f"half_fov_pitch_rad={half_fov_pitch_rad:.4f} to {GAZE_MAPPING_PATH}"
@@ -285,7 +295,8 @@ def main() -> int:
 
     range_result = analyze_range(samples)
     if range_result is not None:
-        old_mapping = yaml.safe_load(GAZE_MAPPING_PATH.read_text(encoding="utf-8")) or {}
+        with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
+            old_mapping = yaml.load(f)
         old_yaw = old_mapping.get("half_fov_yaw_rad")
         old_pitch = old_mapping.get("half_fov_pitch_rad")
         new_yaw, new_pitch = range_result
@@ -296,7 +307,8 @@ def main() -> int:
     else:
         print("[analysis] not enough off-center trials to derive a better range -- skipping")
 
-    decoder_params = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
+    with open(DECODER_PARAMS_PATH, encoding="utf-8") as f:
+        decoder_params = yaml.load(f)
     min_sigma = float(decoder_params.get("gaze_uncertainty", {}).get("min_sigma", 0.01))
 
     sigma_scale = analyze(samples, min_sigma)

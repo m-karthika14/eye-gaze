@@ -5,13 +5,14 @@
 # Gaussian probability mapping over keyboard keys; Phase 7 adds continuous
 # per-user bias correction on top of the one-time startup auto-center below.
 #
-# half_fov_* below are only the INITIAL guess at how much pitch/yaw sweeps the
-# full screen -- vision/gaze_to_screen.py auto-expands this the first time it
-# sees a bigger swing than the guess, so real screen edges become reachable
-# once you've looked at one, without any explicit calibration screen.
+# half_fov_* below have been derived from real data by
+# experiments/calibrate_uncertainty.py's analyze_range() -- not hand-guessed
+# -- computed from this person's actual gaze angle at known target keys.
+# vision/gaze_to_screen.py still auto-expands further from live use if a
+# bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.20   # initial horizontal range guess (~11deg); auto-expands from real use
-half_fov_pitch_rad: 0.12 # initial vertical range guess (~7deg); auto-expands from real use
+half_fov_yaw_rad: 0.2968   # derived from real calibration data (was 0.20 initial guess)
+half_fov_pitch_rad: 0.25   # derived from real calibration data (was 0.12 initial guess)
 invert_x: false          # flip if left/right feels mirrored on your setup
 invert_y: false
 startup_bias_frames: 20  # frames averaged at startup to auto-center the model's resting pitch/yaw bias

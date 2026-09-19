@@ -56,7 +56,7 @@ def draw_prompt(layout: KeyboardLayout, target_id: str, status: str) -> np.ndarr
         thickness = -1 if key.id == target_id else 1
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness)
         cv2.putText(
-            canvas, key.label, (x1 + 8, y1 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1
+            canvas, key.id, (x1 + 8, y1 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1
         )
     cv2.putText(canvas, f"LOOK AT: {target_id}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
     cv2.putText(canvas, status, (20, CANVAS_SIZE[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)

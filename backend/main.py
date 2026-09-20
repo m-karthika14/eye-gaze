@@ -49,15 +49,20 @@ _char_lm = CharLM.load_default()
 _word_suggester = WordSuggester()
 
 
-def _load_uncertainty_config() -> tuple[float, float]:
+def _load_uncertainty_config() -> tuple[float, float, float]:
     if not DECODER_PARAMS_PATH.exists():
-        return DEFAULT_MIN_SIGMA, 1.0
+        return DEFAULT_MIN_SIGMA, 1.0, 0.30
     data = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
-    cfg = data.get("gaze_uncertainty", {})
-    return float(cfg.get("min_sigma", DEFAULT_MIN_SIGMA)), float(cfg.get("sigma_scale", 1.0))
+    uncertainty_cfg = data.get("gaze_uncertainty", {})
+    fallback_cfg = data.get("fallback", {})
+    return (
+        float(uncertainty_cfg.get("min_sigma", DEFAULT_MIN_SIGMA)),
+        float(uncertainty_cfg.get("sigma_scale", 1.0)),
+        float(fallback_cfg.get("min_confidence_threshold", 0.30)),
+    )
 
 
-_min_sigma, _sigma_scale = _load_uncertainty_config()
+_min_sigma, _sigma_scale, _min_confidence_threshold = _load_uncertainty_config()
 
 
 @app.get("/health")
@@ -136,7 +141,48 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 last_layout_text = None
                 key_layout_payload = None
 
+            fixation = sample.get("fixation")
+            key_probs = None
+            fixation_payload = None
+            if fixation is not None:
+                key_probs = key_probabilities(
+                    fixation.mu_x,
+                    fixation.mu_y,
+                    fixation.sigma_x * _sigma_scale,
+                    fixation.sigma_y * _sigma_scale,
+                    _layout,
+                    min_sigma=_min_sigma,
+                )
+                fixation_payload = {
+                    "mu_x": fixation.mu_x,
+                    "mu_y": fixation.mu_y,
+                    "sigma_x": fixation.sigma_x * _sigma_scale,
+                    "sigma_y": fixation.sigma_y * _sigma_scale,
+                    "n_samples": fixation.n_samples,
+                    "duration_ms": fixation.duration_ms,
+                }
+
             event = s0.process_sample(sample["gaze_x"], sample["gaze_y"], time.monotonic())
+
+            low_confidence_veto = False
+            if (
+                adaptive_on
+                and event.selected_key not in (None, "BACKSPACE")
+                and key_probs is not None
+                and max(key_probs.values()) < _min_confidence_threshold
+            ):
+                # Phase 8's low-confidence fallback, pulled forward: don't
+                # force a character out of a distribution the system itself
+                # isn't confident about -- undo what S0 just committed and
+                # wait for a clearer fixation instead of guessing.
+                s0.buffer.apply_key("BACKSPACE")
+                event = S0Event(
+                    text=s0.buffer.text,
+                    selected_key=None,
+                    hovered_key=event.hovered_key,
+                    dwell_progress=event.dwell_progress,
+                )
+                low_confidence_veto = True
 
             if adaptive_on:
                 # SPACE accepts the top suggestion mid-word instead of a
@@ -179,27 +225,6 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 key_layout_payload = None
                 suggestions = []
 
-            fixation = sample.get("fixation")
-            key_probs = None
-            fixation_payload = None
-            if fixation is not None:
-                key_probs = key_probabilities(
-                    fixation.mu_x,
-                    fixation.mu_y,
-                    fixation.sigma_x * _sigma_scale,
-                    fixation.sigma_y * _sigma_scale,
-                    _layout,
-                    min_sigma=_min_sigma,
-                )
-                fixation_payload = {
-                    "mu_x": fixation.mu_x,
-                    "mu_y": fixation.mu_y,
-                    "sigma_x": fixation.sigma_x * _sigma_scale,
-                    "sigma_y": fixation.sigma_y * _sigma_scale,
-                    "n_samples": fixation.n_samples,
-                    "duration_ms": fixation.duration_ms,
-                }
-
             await websocket.send_json(
                 {
                     "gaze_x": sample["gaze_x"],
@@ -213,6 +238,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "key_probabilities": key_probs,
                     "key_layout": key_layout_payload,
                     "suggestions": suggestions,
+                    "low_confidence_veto": low_confidence_veto,
                 }
             )
     except WebSocketDisconnect:

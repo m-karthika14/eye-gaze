@@ -172,6 +172,54 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
     return samples
 
 
+def print_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> None:
+    """A clean per-trial + per-region accuracy report: exact target vs.
+    predicted position, error in normalized units and approximate pixels
+    (assuming a common 1920x1080 screen, just for intuition), and whether
+    the predicted point actually landed on the intended key -- the single
+    most meaningful accuracy number for this application (Section 18's
+    "key hit accuracy"), not an arbitrary aggregate score.
+    """
+    from decoder.nearest_key import nearest_key
+
+    rows = []
+    for s in samples:
+        err_x, err_y = s["mu_x"] - s["true_x"], s["mu_y"] - s["true_y"]
+        euclidean = (err_x**2 + err_y**2) ** 0.5
+        predicted_key = nearest_key(s["mu_x"], s["mu_y"], layout)
+        hit = predicted_key == s["target_key"]
+        rows.append((s["target_key"], predicted_key, err_x, err_y, euclidean, hit))
+
+    rows.sort(key=lambda r: -r[4])
+    print()
+    print("=== Accuracy dashboard (worst first) ===")
+    print(f"{'target':<10}{'predicted':<10}{'err_x':>8}{'err_y':>8}{'err_px(1920x1080)':>20}{'hit?':>6}")
+    for target, predicted, err_x, err_y, euclidean, hit in rows:
+        px = f"({err_x * 1920:+.0f}, {err_y * 1080:+.0f})"
+        print(f"{target:<10}{predicted or '?':<10}{err_x:>+8.3f}{err_y:>+8.3f}{px:>20}{'YES' if hit else 'no':>6}")
+
+    hit_rate = sum(r[5] for r in rows) / len(rows)
+    mean_err_x = statistics.fmean(r[2] for r in rows)
+    mean_err_y = statistics.fmean(r[3] for r in rows)
+    print()
+    print(f"[dashboard] key-hit accuracy: {hit_rate * 100:.0f}% ({sum(r[5] for r in rows)}/{len(rows)} trials landed on the intended key)")
+    print(f"[dashboard] mean signed error: x={mean_err_x:+.3f} y={mean_err_y:+.3f}  "
+          f"(consistently nonzero = directional bias; near-zero with high scatter = noise, not bias)")
+
+    # Split by which half of the screen the target was in -- reveals
+    # left/right or top/bottom-specific problems at a glance.
+    for axis, idx, label in [("x", 0, "LEFT vs RIGHT"), ("y", 1, "TOP vs BOTTOM")]:
+        true_key = "true_x" if axis == "x" else "true_y"
+        err_key = 2 if axis == "x" else 3
+        low = [s for s in samples if s[true_key] < 0.5]
+        high = [s for s in samples if s[true_key] >= 0.5]
+        if low and high:
+            low_err = statistics.fmean(abs(s["mu_x" if axis == "x" else "mu_y"] - s[true_key]) for s in low)
+            high_err = statistics.fmean(abs(s["mu_x" if axis == "x" else "mu_y"] - s[true_key]) for s in high)
+            side_a, side_b = ("LEFT", "RIGHT") if axis == "x" else ("TOP", "BOTTOM")
+            print(f"[dashboard] {label}: {side_a} mean abs error={low_err:.3f}  {side_b} mean abs error={high_err:.3f}")
+
+
 # For Z ~ N(0, 1), median(|Z|) = 0.6745 (the 75th-percentile point of the
 # standard normal). This is the standard median-absolute-deviation robust
 # scale estimator: unlike mean(z^2), which squares every error and lets one
@@ -292,6 +340,8 @@ def main() -> int:
         for s in samples:
             f.write(json.dumps(s) + "\n")
     print(f"[OK] saved {len(samples)} trials to {SAMPLES_PATH}")
+
+    print_accuracy_dashboard(samples, layout)
 
     range_result = analyze_range(samples)
     if range_result is not None:

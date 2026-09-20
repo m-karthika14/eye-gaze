@@ -11,11 +11,18 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.2968   # derived from real calibration data (was 0.20 initial guess)
-half_fov_pitch_rad: 0.25   # derived from real calibration data (was 0.12 initial guess)
-invert_x: false          # flip if left/right feels mirrored on your setup
-invert_y: true           # confirmed inverted on this setup (looking up moved the dot down) -- likely
-                          # webcam mounting/geometry specific to this person's setup, not a code bug
+half_fov_yaw_rad: 0.15    # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
+                          # which caused the "stuck in the middle" undershoot on the horizontal axis)
+half_fov_pitch_rad: 0.10  # measured directly from raw pitch output: real swing is asymmetric
+                          # (up ~14deg, down ~7deg) -- set below the smaller (down) side so it
+                          # doesn't undershoot; auto-expansion grows it toward 14deg on an upward glance
+invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking
+                          # left produced MORE POSITIVE yaw, looking right produced MORE NEGATIVE yaw --
+                          # backwards from the documented convention, specific to this setup
+invert_y: false           # raw pitch readout confirmed this is NOT inverted (up -> more positive pitch,
+                          # down -> more negative, matches the documented convention) -- the earlier
+                          # invert_y:true here was based on a live-app symptom that turned out to have a
+                          # different cause; this raw measurement overrides it
 startup_bias_frames: 20  # frames averaged at startup to auto-center the model's resting pitch/yaw bias
                           # (every appearance-based gaze model has one -- without this the mapped
                           # point can sit clamped at one screen edge regardless of real eye movement)

@@ -281,11 +281,17 @@ def analyze_range(samples: list[dict]) -> tuple[float, float] | None:
         if "rel_yaw" not in s:
             continue  # samples recorded before this field existed
         dx, dy = s["true_x"] - 0.5, s["true_y"] - 0.5
-        # Skip near-center targets -- dividing by a tiny dx/dy is unstable
-        # and a center-ish target doesn't meaningfully constrain the range.
-        if abs(dx) > 0.05:
+        # Skip near-center targets -- dividing by a small dx/dy amplifies
+        # ordinary measurement noise into wildly unstable per-trial estimates
+        # (observed empirically: the home row's dy=0.125 trials produced
+        # implied half_fov values spanning 0.003 to 1.43 -- a ~500x spread --
+        # which then dominates/pollutes the median below). 0.25 keeps only
+        # the outermost row/column on each axis, where the denominator is
+        # large enough that per-trial noise stays a minor fraction of the
+        # estimate instead of the whole story.
+        if abs(dx) > 0.25:
             yaw_estimates.append(abs(s["rel_yaw"]) / (2 * abs(dx)))
-        if abs(dy) > 0.05:
+        if abs(dy) > 0.25:
             pitch_estimates.append(abs(s["rel_pitch"]) / (2 * abs(dy)))
 
     if len(yaw_estimates) < 4 or len(pitch_estimates) < 4:

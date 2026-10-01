@@ -11,9 +11,9 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.13    # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
+half_fov_yaw_rad: 0.1802  # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
                           # which caused the "stuck in the middle" undershoot on the horizontal axis)
-half_fov_pitch_rad: 0.1362 # measured directly from raw pitch output: real swing is asymmetric
+half_fov_pitch_rad: 0.1217 # measured directly from raw pitch output: real swing is asymmetric
                           # (up ~14deg, down ~7deg) -- set below the smaller (down) side so it
                           # doesn't undershoot; auto-expansion grows it toward 14deg on an upward glance
 invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking

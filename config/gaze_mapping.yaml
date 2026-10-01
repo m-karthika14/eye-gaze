@@ -11,9 +11,9 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.15    # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
+half_fov_yaw_rad: 0.13    # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
                           # which caused the "stuck in the middle" undershoot on the horizontal axis)
-half_fov_pitch_rad: 0.10  # measured directly from raw pitch output: real swing is asymmetric
+half_fov_pitch_rad: 0.1362 # measured directly from raw pitch output: real swing is asymmetric
                           # (up ~14deg, down ~7deg) -- set below the smaller (down) side so it
                           # doesn't undershoot; auto-expansion grows it toward 14deg on an upward glance
 invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking
@@ -27,6 +27,17 @@ startup_bias_frames: 20  # frames averaged at startup to auto-center the model's
                           # (every appearance-based gaze model has one -- without this the mapped
                           # point can sit clamped at one screen edge regardless of real eye movement)
 max_range_rad: 0.9       # sanity cap on auto-expanded range, so a single noisy outlier can't blow it up
+
+# Phase 7 slice, pulled forward: the one-time startup lock above only
+# corrects bias at t=0 -- on longer sessions, head/posture drift partway
+# through silently invalidates it (confirmed on real calibration data: raw
+# per-key readings crept monotonically across repeats within one multi-minute
+# session). These keep the bias continuously chasing a slow moving average
+# of the raw signal after the initial lock, so drift self-corrects instead
+# of accumulating.
+drift_correction_enabled: true
+drift_tau_s: 30.0        # time constant of the chase -- long enough that no single key's dwell (<2s) moves it
+drift_max_alpha: 0.2     # per-update cap, so one long pause/gap can't snap the bias to a single sample
 
 # One Euro Filter (Casiez et al. 2012) -- replaces flat EMA smoothing. Adapts
 # its own smoothing to how fast the signal is moving: heavy smoothing while

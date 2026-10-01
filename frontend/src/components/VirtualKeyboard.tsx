@@ -10,6 +10,11 @@ interface Props {
   keyProbabilities: Record<string, number> | null
   keyLayoutOverride: Record<string, KeyGeometry> | null
   spaceLabel: string | null
+  // Calibration mode (see CalibrationScreen): highlights one key as the
+  // current "look at this" target, with its own progress ring driven by
+  // fixation_progress from /ws/calibrate rather than S0's dwell_progress.
+  calibrationTarget?: string | null
+  calibrationProgress?: number
 }
 
 export function VirtualKeyboard({
@@ -20,12 +25,15 @@ export function VirtualKeyboard({
   keyProbabilities,
   keyLayoutOverride,
   spaceLabel,
+  calibrationTarget = null,
+  calibrationProgress = 0,
 }: Props) {
   return (
     <div className="relative h-full w-full">
       {layout.keys.map((key) => {
         const isSelected = key.id === selectedKey
         const isHovered = key.id === hoveredKey
+        const isCalibrationTarget = key.id === calibrationTarget
         const prob = keyProbabilities?.[key.id] ?? 0
         // Scaled up since mass is usually concentrated on a handful of keys
         // out of 28 -- a "fair" 1/28 share would otherwise look invisible.
@@ -38,7 +46,7 @@ export function VirtualKeyboard({
           width: `${geometry.width * 100}%`,
           height: `${geometry.height * 100}%`,
         }
-        if (!isSelected && !isHovered && heatAlpha > 0.02) {
+        if (!isSelected && !isHovered && !isCalibrationTarget && heatAlpha > 0.02) {
           style.backgroundColor = `rgba(168, 85, 247, ${heatAlpha})`
         }
 
@@ -48,16 +56,19 @@ export function VirtualKeyboard({
           <div
             key={key.id}
             className={`absolute flex select-none items-center justify-center overflow-hidden border border-slate-700 text-sm font-medium transition-all duration-200 ${
-              isSelected
-                ? 'bg-emerald-400 text-slate-900'
-                : isHovered
-                  ? 'bg-sky-600 text-white'
-                  : 'bg-slate-800 text-slate-200'
+              isCalibrationTarget
+                ? 'bg-amber-400 text-slate-900 ring-4 ring-amber-300'
+                : isSelected
+                  ? 'bg-emerald-400 text-slate-900'
+                  : isHovered
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-800 text-slate-200'
             }`}
             style={style}
           >
             {label}
             {isHovered && <DwellRing progress={dwellProgress} />}
+            {isCalibrationTarget && <DwellRing progress={calibrationProgress} />}
           </div>
         )
       })}

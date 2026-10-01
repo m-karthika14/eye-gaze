@@ -176,13 +176,14 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
     return samples
 
 
-def print_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> None:
-    """A clean per-trial + per-region accuracy report: exact target vs.
-    predicted position, error in normalized units and approximate pixels
-    (assuming a common 1920x1080 screen, just for intuition), and whether
-    the predicted point actually landed on the intended key -- the single
-    most meaningful accuracy number for this application (Section 18's
-    "key hit accuracy"), not an arbitrary aggregate score.
+def compute_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> dict:
+    """Pure computation behind the accuracy dashboard -- per-trial target vs.
+    predicted position, error, and hit/miss, plus the aggregate key-hit rate,
+    mean signed error (directional bias vs. plain noise), and a left/right,
+    top/bottom split (surfaces axis-specific problems like a yaw-inversion
+    bug at a glance). Returns plain data so both the CLI script
+    (print_accuracy_dashboard, below) and the in-app calibration flow
+    (backend/calibration.py) can present the same numbers in their own UI.
     """
     from decoder.nearest_key import nearest_key
 
@@ -192,36 +193,69 @@ def print_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> Non
         euclidean = (err_x**2 + err_y**2) ** 0.5
         predicted_key = nearest_key(s["mu_x"], s["mu_y"], layout)
         hit = predicted_key == s["target_key"]
-        rows.append((s["target_key"], predicted_key, err_x, err_y, euclidean, hit))
+        rows.append(
+            {
+                "target": s["target_key"],
+                "predicted": predicted_key,
+                "err_x": err_x,
+                "err_y": err_y,
+                "euclidean": euclidean,
+                "hit": hit,
+            }
+        )
+    rows.sort(key=lambda r: -r["euclidean"])
 
-    rows.sort(key=lambda r: -r[4])
-    print()
-    print("=== Accuracy dashboard (worst first) ===")
-    print(f"{'target':<10}{'predicted':<10}{'err_x':>8}{'err_y':>8}{'err_px(1920x1080)':>20}{'hit?':>6}")
-    for target, predicted, err_x, err_y, euclidean, hit in rows:
-        px = f"({err_x * 1920:+.0f}, {err_y * 1080:+.0f})"
-        print(f"{target:<10}{predicted or '?':<10}{err_x:>+8.3f}{err_y:>+8.3f}{px:>20}{'YES' if hit else 'no':>6}")
+    hit_rate = sum(r["hit"] for r in rows) / len(rows)
+    mean_err_x = statistics.fmean(r["err_x"] for r in rows)
+    mean_err_y = statistics.fmean(r["err_y"] for r in rows)
 
-    hit_rate = sum(r[5] for r in rows) / len(rows)
-    mean_err_x = statistics.fmean(r[2] for r in rows)
-    mean_err_y = statistics.fmean(r[3] for r in rows)
-    print()
-    print(f"[dashboard] key-hit accuracy: {hit_rate * 100:.0f}% ({sum(r[5] for r in rows)}/{len(rows)} trials landed on the intended key)")
-    print(f"[dashboard] mean signed error: x={mean_err_x:+.3f} y={mean_err_y:+.3f}  "
-          f"(consistently nonzero = directional bias; near-zero with high scatter = noise, not bias)")
-
-    # Split by which half of the screen the target was in -- reveals
-    # left/right or top/bottom-specific problems at a glance.
-    for axis, idx, label in [("x", 0, "LEFT vs RIGHT"), ("y", 1, "TOP vs BOTTOM")]:
-        true_key = "true_x" if axis == "x" else "true_y"
-        err_key = 2 if axis == "x" else 3
+    splits = {}
+    for axis, label in [("x", "left_right"), ("y", "top_bottom")]:
+        true_key = f"true_{axis}"
+        mu_key = f"mu_{axis}"
         low = [s for s in samples if s[true_key] < 0.5]
         high = [s for s in samples if s[true_key] >= 0.5]
         if low and high:
-            low_err = statistics.fmean(abs(s["mu_x" if axis == "x" else "mu_y"] - s[true_key]) for s in low)
-            high_err = statistics.fmean(abs(s["mu_x" if axis == "x" else "mu_y"] - s[true_key]) for s in high)
-            side_a, side_b = ("LEFT", "RIGHT") if axis == "x" else ("TOP", "BOTTOM")
-            print(f"[dashboard] {label}: {side_a} mean abs error={low_err:.3f}  {side_b} mean abs error={high_err:.3f}")
+            splits[label] = {
+                "low_mean_abs_error": statistics.fmean(abs(s[mu_key] - s[true_key]) for s in low),
+                "high_mean_abs_error": statistics.fmean(abs(s[mu_key] - s[true_key]) for s in high),
+            }
+
+    return {
+        "rows": rows,
+        "hit_rate": hit_rate,
+        "hits": sum(r["hit"] for r in rows),
+        "total": len(rows),
+        "mean_err_x": mean_err_x,
+        "mean_err_y": mean_err_y,
+        "splits": splits,
+    }
+
+
+def print_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> None:
+    """Terminal presentation of compute_accuracy_dashboard() -- see there for
+    what each number means and why (Section 18's "key hit accuracy" is the
+    single most meaningful number for this application, not an arbitrary
+    aggregate score)."""
+    d = compute_accuracy_dashboard(samples, layout)
+    print()
+    print("=== Accuracy dashboard (worst first) ===")
+    print(f"{'target':<10}{'predicted':<10}{'err_x':>8}{'err_y':>8}{'err_px(1920x1080)':>20}{'hit?':>6}")
+    for r in d["rows"]:
+        px = f"({r['err_x'] * 1920:+.0f}, {r['err_y'] * 1080:+.0f})"
+        print(f"{r['target']:<10}{r['predicted'] or '?':<10}{r['err_x']:>+8.3f}{r['err_y']:>+8.3f}{px:>20}{'YES' if r['hit'] else 'no':>6}")
+
+    print()
+    print(f"[dashboard] key-hit accuracy: {d['hit_rate'] * 100:.0f}% ({d['hits']}/{d['total']} trials landed on the intended key)")
+    print(f"[dashboard] mean signed error: x={d['mean_err_x']:+.3f} y={d['mean_err_y']:+.3f}  "
+          f"(consistently nonzero = directional bias; near-zero with high scatter = noise, not bias)")
+
+    if "left_right" in d["splits"]:
+        s = d["splits"]["left_right"]
+        print(f"[dashboard] LEFT vs RIGHT: LEFT mean abs error={s['low_mean_abs_error']:.3f}  RIGHT mean abs error={s['high_mean_abs_error']:.3f}")
+    if "top_bottom" in d["splits"]:
+        s = d["splits"]["top_bottom"]
+        print(f"[dashboard] TOP vs BOTTOM: TOP mean abs error={s['low_mean_abs_error']:.3f}  BOTTOM mean abs error={s['high_mean_abs_error']:.3f}")
 
 
 # For Z ~ N(0, 1), median(|Z|) = 0.6745 (the 75th-percentile point of the
@@ -233,10 +267,11 @@ def print_accuracy_dashboard(samples: list[dict], layout: KeyboardLayout) -> Non
 MEDIAN_ABS_Z_STANDARD_NORMAL = 0.6745
 
 
-def analyze(samples: list[dict], min_sigma: float) -> float:
-    """Returns sigma_scale such that (mu - true) / (sigma * scale) behaves
-    like a standard normal across trials, estimated robustly via the median
-    of |z| rather than the mean of z^2."""
+def compute_sigma_scale(samples: list[dict], min_sigma: float) -> dict:
+    """Pure computation behind analyze() -- see there for what sigma_scale
+    means. Returns both the robust (median-based) and naive (mean(z^2)-based)
+    estimates so a caller (CLI or in-app) can show how much outliers would
+    have skewed the naive one."""
     z_abs: list[float] = []
     for s in samples:
         sigma_x = max(s["sigma_x"], min_sigma)
@@ -246,11 +281,18 @@ def analyze(samples: list[dict], min_sigma: float) -> float:
 
     median_abs_z = statistics.median(z_abs)
     sigma_scale = median_abs_z / MEDIAN_ABS_Z_STANDARD_NORMAL
-
-    # Still surface the mean(z^2) view for comparison -- a big gap between
-    # the two numbers itself tells you outliers are driving the naive stat.
     mean_z_sq = sum(z * z for z in z_abs) / len(z_abs)
     naive_scale = mean_z_sq**0.5
+
+    return {"sigma_scale": sigma_scale, "naive_scale": naive_scale, "n_trials": len(samples)}
+
+
+def analyze(samples: list[dict], min_sigma: float) -> float:
+    """Returns sigma_scale such that (mu - true) / (sigma * scale) behaves
+    like a standard normal across trials, estimated robustly via the median
+    of |z| rather than the mean of z^2."""
+    result = compute_sigma_scale(samples, min_sigma)
+    sigma_scale, naive_scale = result["sigma_scale"], result["naive_scale"]
 
     print()
     print(f"[analysis] {len(samples)} trials")

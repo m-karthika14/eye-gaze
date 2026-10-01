@@ -24,6 +24,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.adaptive_layout import accept_suggestion, compute_adaptive_layout
+from backend.calibration import run_calibration_session
 from decoder.char_lm import CharLM
 from decoder.key_probability import DEFAULT_MIN_SIGMA, key_probabilities
 from decoder.nearest_key import DEFAULT_LAYOUT_PATH, KeyboardLayout
@@ -62,9 +63,6 @@ def _load_uncertainty_config() -> tuple[float, float, float]:
     )
 
 
-_min_sigma, _sigma_scale, _min_confidence_threshold = _load_uncertainty_config()
-
-
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -89,6 +87,11 @@ async def ws_gaze(websocket: WebSocket) -> None:
         await websocket.send_json({"error": str(exc)})
         await websocket.close()
         return
+
+    # Reloaded fresh per connection (not once at module import) so a value
+    # just written by an in-app calibration run (backend/calibration.py)
+    # takes effect on the next connection without restarting the backend.
+    min_sigma, sigma_scale, min_confidence_threshold = _load_uncertainty_config()
 
     s0 = S0System(layout=_layout)
     loop = asyncio.get_event_loop()
@@ -148,16 +151,16 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 key_probs = key_probabilities(
                     fixation.mu_x,
                     fixation.mu_y,
-                    fixation.sigma_x * _sigma_scale,
-                    fixation.sigma_y * _sigma_scale,
+                    fixation.sigma_x * sigma_scale,
+                    fixation.sigma_y * sigma_scale,
                     _layout,
-                    min_sigma=_min_sigma,
+                    min_sigma=min_sigma,
                 )
                 fixation_payload = {
                     "mu_x": fixation.mu_x,
                     "mu_y": fixation.mu_y,
-                    "sigma_x": fixation.sigma_x * _sigma_scale,
-                    "sigma_y": fixation.sigma_y * _sigma_scale,
+                    "sigma_x": fixation.sigma_x * sigma_scale,
+                    "sigma_y": fixation.sigma_y * sigma_scale,
                     "n_samples": fixation.n_samples,
                     "duration_ms": fixation.duration_ms,
                 }
@@ -169,7 +172,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 adaptive_on
                 and event.selected_key not in (None, "BACKSPACE")
                 and key_probs is not None
-                and max(key_probs.values()) < _min_confidence_threshold
+                and max(key_probs.values()) < min_confidence_threshold
             ):
                 # Phase 8's low-confidence fallback, pulled forward: don't
                 # force a character out of a distribution the system itself
@@ -246,3 +249,12 @@ async def ws_gaze(websocket: WebSocket) -> None:
     finally:
         receiver_task.cancel()
         pipeline.close()
+
+
+@app.websocket("/ws/calibrate")
+async def ws_calibrate(websocket: WebSocket) -> None:
+    """In-app calibration: the same live-fixation flow as
+    experiments/calibrate_uncertainty.py, surfaced in the real product UI
+    (see backend/calibration.py). Only one of this and /ws/gaze can hold the
+    webcam at a time -- make sure the typing socket isn't connected first."""
+    await run_calibration_session(websocket)

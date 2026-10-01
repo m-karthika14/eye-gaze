@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BACKEND_WS } from '../config'
 import type { GazeMessage } from '../types'
 
-export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting'
+export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'paused'
 
 const BASE_RECONNECT_DELAY_MS = 1500
 const MAX_RECONNECT_DELAY_MS = 8000
@@ -11,14 +11,25 @@ const MAX_RECONNECT_DELAY_MS = 8000
  * Connects to /ws/gaze and auto-reconnects with backoff on any drop --
  * webcam reads can hiccup transiently (see vision/webcam.py), and the user
  * shouldn't have to manually reload the page to recover.
+ *
+ * `enabled` (default true) lets a caller close this connection on demand --
+ * needed because only one process can hold the webcam at a time, so
+ * CalibrationScreen's /ws/calibrate session can't open while this is
+ * connected.
  */
-export function useGazeSocket() {
+export function useGazeSocket(enabled = true) {
   const [message, setMessage] = useState<GazeMessage | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
+    if (!enabled) {
+      wsRef.current?.close()
+      wsRef.current = null
+      return
+    }
+
     let cancelled = false
     let reconnectDelay = BASE_RECONNECT_DELAY_MS
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -64,7 +75,7 @@ export function useGazeSocket() {
       if (reconnectTimer) clearTimeout(reconnectTimer)
       wsRef.current?.close()
     }
-  }, [])
+  }, [enabled])
 
   const sendMessage = useCallback((data: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -72,5 +83,5 @@ export function useGazeSocket() {
     }
   }, [])
 
-  return { message, status, error, sendMessage }
+  return { message, status: enabled ? status : 'paused', error, sendMessage }
 }

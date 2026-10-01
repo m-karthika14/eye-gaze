@@ -12,8 +12,22 @@ regardless of real eye movement. Phase 2 corrects this with a one-time
 startup auto-center: the first `startup_bias_frames` samples are averaged
 into a bias estimate (assuming the user looks roughly at the screen while the
 app starts up), then locked for the rest of the session -- no explicit
-calibration screen, just an implicit zero-point. Phase 7 replaces this with
-continuous online bias adaptation from natural read-back behaviour.
+calibration screen, just an implicit zero-point.
+
+That one-time lock has a real failure mode on longer sessions: head/posture
+position drifts gradually over minutes (confirmed on real calibration data --
+per-key raw-angle readings crept monotonically across repeats within a single
+multi-minute session), silently invalidating the locked bias partway through.
+A scoped slice of Phase 7 is pulled forward here to address it: after the
+initial lock, the bias continues to slowly chase a long-time-constant (tens
+of seconds) exponential moving average of the raw signal -- the same "gaze
+averages out near center over time" assumption the startup lock uses, just
+renewed continuously instead of frozen after the first second. The time
+constant is long enough that no single key's dwell (under ~2s) meaningfully
+moves it; only sustained drift across many seconds does. Full Phase 7 online
+adaptation from natural read-back behaviour (e.g. anchoring on the text
+display specifically, rather than an undifferentiated running average) is
+still future work.
 
 The `half_fov_*_rad` constants are a *guess* at how many radians of pitch/yaw
 correspond to the full screen half-width/height -- calibrated for an assumed
@@ -63,6 +77,9 @@ class GazeMappingConfig:
     filter_min_cutoff: float = 1.0  # One Euro Filter: lower = more smoothing at rest (less jitter)
     filter_beta: float = 3.0  # One Euro Filter: higher = faster response during movement (less lag)
     filter_d_cutoff: float = 1.0  # One Euro Filter: cutoff for the internal velocity estimate
+    drift_correction_enabled: bool = True  # continuous post-lock bias adaptation (Phase 7 slice); see module docstring
+    drift_tau_s: float = 30.0  # time constant of the chase -- long enough that no single key's dwell moves it
+    drift_max_alpha: float = 0.2  # per-update cap, so one long pause/gap can't snap the bias to a single sample
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -94,6 +111,7 @@ class GazeToScreenMapper:
         # which mu_x/mu_y alone can't give you once clamping has kicked in).
         self._last_rel_yaw = 0.0
         self._last_rel_pitch = 0.0
+        self._last_drift_ts: float | None = None
         self._filter_x = self._make_filter()
         self._filter_y = self._make_filter()
 
@@ -142,6 +160,7 @@ class GazeToScreenMapper:
         self._bias_locked = False
         self._range_yaw = self.config.half_fov_yaw_rad
         self._range_pitch = self.config.half_fov_pitch_rad
+        self._last_drift_ts = None
 
     def map(self, pitch: float, yaw: float, timestamp: float) -> MappedGaze:
         cfg = self.config
@@ -152,10 +171,18 @@ class GazeToScreenMapper:
                 self._bias_pitch = sum(p for p, _ in self._bias_samples) / len(self._bias_samples)
                 self._bias_yaw = sum(y for _, y in self._bias_samples) / len(self._bias_samples)
                 self._bias_locked = True
+                self._last_drift_ts = timestamp
             # Report center while still collecting the bias estimate, rather
             # than showing wild swings computed against a not-yet-valid zero.
             raw_x, raw_y = 0.5, 0.5
         else:
+            if cfg.drift_correction_enabled and cfg.drift_tau_s > 0:
+                dt = max(timestamp - self._last_drift_ts, 0.0) if self._last_drift_ts is not None else 0.0
+                alpha = min(dt / cfg.drift_tau_s, cfg.drift_max_alpha)
+                self._bias_pitch += alpha * (pitch - self._bias_pitch)
+                self._bias_yaw += alpha * (yaw - self._bias_yaw)
+            self._last_drift_ts = timestamp
+
             rel_pitch = pitch - self._bias_pitch
             rel_yaw = yaw - self._bias_yaw
             self._last_rel_yaw = rel_yaw

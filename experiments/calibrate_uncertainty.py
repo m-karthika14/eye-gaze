@@ -56,7 +56,11 @@ TARGET_KEYS = ["Q", "P", "Z", "M", "D", "H", "A", "L", "T", "B", "SPACE", "BACKS
 # Each target is visited this many times (in randomized order, not back to
 # back) so the estimate isn't skewed by one or two rough trials -- a handful
 # of trials per key is not enough to trust a single global scale factor from.
-REPEATS = 3
+# 3 repeats proved too few in practice: real per-key data showed single
+# trials swinging 2-3x from their siblings (webcam appearance-based gaze
+# noise, not a bug), so the median/robust estimators below didn't have
+# enough samples per key to average that out.
+REPEATS = 6
 
 TARGET_FIXATION_MS = 600.0  # how long we wait for a fixation to accumulate before recording it
 SETTLE_TIMEOUT_S = 8.0  # give up on a trial if no stable fixation forms in this long

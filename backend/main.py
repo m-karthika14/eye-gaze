@@ -136,7 +136,11 @@ async def ws_gaze(websocket: WebSocket) -> None:
 
     # Phase 6 state. adaptive_keyboard defaults OFF per user request (no merging keys)
     # decoder_mode defaults to "s4" (joint probabilistic LM beam search)
-    settings = {"adaptive_keyboard": False, "decoder_mode": "s4"}
+    # select_mode: "blink" = look at a key, then hold your eyes shut ~0.5s (natural blinks are ignored);
+    # "switch" = look at a key, then press Space/Enter (or click) to select it;
+    # "dwell" = hold gaze ~0.8s. Switch is the default because dwell selects whatever you
+    # happen to rest your eyes on (reading, hunting for the next key) -- the Midas-touch problem.
+    settings = {"adaptive_keyboard": False, "decoder_mode": "s4", "select_mode": "blink"}
     last_layout_text: str | None = None
     key_layout_payload: dict | None = None
     suggestions: list[str] = []
@@ -159,6 +163,10 @@ async def ws_gaze(websocket: WebSocket) -> None:
                                 s0.buffer.reset()
                                 s0.buffer.text = s4.current_text
                         settings["decoder_mode"] = dm
+                if "select_mode" in msg and str(msg["select_mode"]) in ("dwell", "switch", "blink", "mouth"):
+                    settings["select_mode"] = str(msg["select_mode"])
+                if msg.get("select"):
+                    settings["pending_select"] = True
                 if msg.get("clear_text"):
                     s0.reset()
                     s4.reset()
@@ -257,13 +265,20 @@ async def ws_gaze(websocket: WebSocket) -> None:
 
             decoder_mode = settings.get("decoder_mode", "s4")
             now_ts = time.monotonic()
+            s4.dwell_enabled = settings.get("select_mode", "blink") == "dwell"
+            eyes_closed = bool(sample.get("eyes_closed") or sample.get("mouth_open"))  # gaze is held while either gesture is in progress
+            pending_select = settings.pop("pending_select", False)
             # Gaze that has left the keyboard (e.g. reading the text box above it)
             # must not dwell on the clamped edge key -- treat it as no gaze.
-            if sample.get("on_keyboard", True):
+            if eyes_closed:
+                dwell_x, dwell_y = None, None  # unused: the decoder is held below
+            elif sample.get("on_keyboard", True):
                 dwell_x, dwell_y = sample["gaze_x"], sample["gaze_y"]
             else:
                 dwell_x, dwell_y = None, None
-            if decoder_mode == "s4":
+            if decoder_mode == "s4" and eyes_closed:
+                event = s4.hold()  # keep the highlight frozen while the eyes are shut
+            elif decoder_mode == "s4":
                 event = s4.process_sample(
                     dwell_x,
                     dwell_y,
@@ -273,6 +288,22 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 )
             else:
                 event = s0.process_sample(dwell_x, dwell_y, now_ts)
+
+            if pending_select and decoder_mode == "s4" and not settings.get("typing_paused"):
+                event = s4.select_now(now_ts, sigma_scale=sigma_scale)
+            elif (
+                (
+                    (sample.get("blink_fired") and settings.get("select_mode") == "blink")
+                    or (sample.get("mouth_fired") and settings.get("select_mode") == "mouth")
+                )
+                and decoder_mode == "s4"
+                and not settings.get("typing_paused")
+            ):
+                # Deliberate blink: select the key highlighted just BEFORE the lids dropped.
+                closed_since = (
+                    sample.get("blink_closed_since") if settings.get("select_mode") == "blink" else sample.get("mouth_since")
+                ) or now_ts
+                event = s4.select_now(now_ts, sigma_scale=sigma_scale, at_time=closed_since - 0.25)
 
             # When typing is paused (testing / eyeball tracking mode), do not commit key selections
             if settings.get("typing_paused"):
@@ -352,6 +383,12 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "dwell_progress": event.dwell_progress,
                     "text": event.text,
                     "decoder_mode": decoder_mode,
+                    "select_mode": settings.get("select_mode", "blink"),
+                    "blink_progress": round(float(sample.get("blink_progress") or 0.0), 2),
+                    "mouth_progress": round(float(sample.get("mouth_progress") or 0.0), 2),
+                    "ear": round(float(sample["ear"]), 2) if sample.get("ear") is not None else None,
+                    "mar": round(float(sample["mar"]), 2) if sample.get("mar") is not None else None,
+                    "eyes_closed": eyes_closed,
                     "active_word": s4.active_word if decoder_mode == "s4" else "",
                     "candidates": s4.candidates if decoder_mode == "s4" else [],
                     "fps": round(fps_ema, 1),

@@ -60,6 +60,10 @@ detect_size: 320
 # ONNX Runtime thread cap. The ORT default measured 344 ms/frame for the gaze CNN on this
 # 8-logical-core hybrid CPU vs 14 ms with 4 threads. 0 = ORT default.
 ort_threads: 4
+# Blink-to-select (vision/blink.py): FaceMesh gives eye openness; holding the eyes shut for
+# blink_min_ms selects the key you were looking at. Natural blinks (<~300ms) are ignored.
+eye_mesh: true
+blink_min_ms: 450
 # Learned by Calibrate (experiments/calibrate_uncertainty.py fit_affine): x = c0 + c1*rel_yaw + c2*rel_pitch.
 # While these two are present they REPLACE half_fov_*/invert_x/invert_y above (the Invert buttons in the
 # app do nothing). Delete both keys to go back to the heuristic mapping.

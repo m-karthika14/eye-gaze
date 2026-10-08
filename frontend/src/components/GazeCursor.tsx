@@ -17,6 +17,8 @@ export function GazeCursor({ x, y }: Props) {
         left: `${x * 100}%`,
         top: `${y * 100}%`,
         transform: 'translate(-3px, -2px)',
+        // Glide between the ~10-15 fps gaze updates instead of jumping.
+        transition: 'left 110ms linear, top 110ms linear',
       }}
     >
       {/* Precision target dot at the exact tip */}

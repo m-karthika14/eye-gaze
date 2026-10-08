@@ -21,6 +21,7 @@ function App() {
   const [typingPaused, setTypingPaused] = useState<boolean>(false)
   const [showTrackerFeed, setShowTrackerFeed] = useState<boolean>(true)
   const [decoderMode, setDecoderMode] = useState<'s4' | 's0'>('s4')
+  const [selectMode, setSelectMode] = useState<'dwell' | 'switch' | 'blink' | 'mouth'>('blink')
 
   // Sync state from backend if received
   useEffect(() => {
@@ -28,7 +29,8 @@ function App() {
     if (message?.invert_y !== undefined) setInvertY(message.invert_y)
     if (message?.typing_paused !== undefined) setTypingPaused(message.typing_paused)
     if (message?.decoder_mode !== undefined) setDecoderMode(message.decoder_mode)
-  }, [message?.invert_x, message?.invert_y, message?.typing_paused, message?.decoder_mode])
+    if (message?.select_mode !== undefined) setSelectMode(message.select_mode)
+  }, [message?.invert_x, message?.invert_y, message?.typing_paused, message?.decoder_mode, message?.select_mode])
 
   // Recenter helper
   function handleRecenter() {
@@ -40,6 +42,10 @@ function App() {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'c' || e.key === 'C') {
         handleRecenter()
+      } else if (e.key === ' ' || e.key === 'Enter') {
+        // Confirm the key being looked at (select mode "switch"). preventDefault so a focused button isn't also clicked.
+        e.preventDefault()
+        sendMessage({ select: true })
       } else if (e.key === '1' || e.key === '2' || e.key === '3') {
         sendMessage({ pick_candidate: Number(e.key) - 1 })
       }
@@ -64,6 +70,13 @@ function App() {
     const next = !typingPaused
     setTypingPaused(next)
     sendMessage({ pause_typing: next })
+  }
+
+  function toggleSelectMode() {
+    const order = ['blink', 'mouth', 'switch', 'dwell'] as const
+    const next = order[(order.indexOf(selectMode) + 1) % order.length]
+    setSelectMode(next)
+    sendMessage({ select_mode: next })
   }
 
   function toggleDecoderMode() {
@@ -121,6 +134,19 @@ function App() {
               }`}
             >
               {decoderMode === 's4' ? '🧠 Decoder: S4 (LM Beam)' : '🔤 Decoder: S0 (Raw Key)'}
+            </button>
+
+            {/* Selection method: confirm with a key press vs. dwell */}
+            <button
+              onClick={toggleSelectMode}
+              title="Blink: look at a key, then hold your eyes shut ~0.5s. Space/Enter: look at a key, then press Space or Enter. Dwell: hold your gaze ~0.8s. (Space/Enter always works too.)"
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold border transition-all ${
+                selectMode !== 'dwell'
+                  ? 'bg-fuchsia-900/80 border-fuchsia-500 text-fuchsia-100 hover:bg-fuchsia-800'
+                  : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              {{ blink: '👁️ Select: Blink', mouth: '👄 Select: Mouth open', switch: '⌨️ Select: Space/Enter', dwell: '⏱️ Select: Dwell' }[selectMode]}
             </button>
 
             {/* Recenter Gaze */}
@@ -274,7 +300,21 @@ function App() {
               <span className={(message?.fps ?? 0) < 10 ? 'text-amber-400 mr-3' : 'mr-3'}>
                 {message?.fps ? `${message.fps.toFixed(0)} fps (${message.infer_ms ?? 0} ms inference)` : ''}
               </span>
-              Look at screen center & press <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">C</kbd> to zero bias.
+              {(message?.mouth_progress ?? 0) > 0 && selectMode === 'mouth' && (
+                <span className="mr-3 font-semibold text-fuchsia-300">
+                  👄 hold… {Math.round((message?.mouth_progress ?? 0) * 100)}%
+                </span>
+              )}
+              {(message?.blink_progress ?? 0) > 0 && selectMode === 'blink' && (
+                <span className="mr-3 font-semibold text-fuchsia-300">
+                  👁️ hold… {Math.round((message?.blink_progress ?? 0) * 100)}%
+                </span>
+              )}
+              <span className="mr-3 text-slate-500">
+                eye {message?.ear?.toFixed(2) ?? '–'} · mouth {message?.mar?.toFixed(2) ?? '–'}
+              </span>
+              {selectMode === 'blink' ? 'Look at a key, hold eyes shut ~0.5s to select · ' : selectMode === 'mouth' ? 'Look at a key, open your mouth wide ~0.4s to select · ' : selectMode === 'switch' ? 'Look at a key, press Space/Enter to select · ' : ''}
+              <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">C</kbd> re-centres.
             </div>
           </footer>
         </div>

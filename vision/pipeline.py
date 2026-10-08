@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from .blink import BlinkDetector, MouthOpenDetector
 from .face_gaze import FaceGazeEstimator
 from .fixation import FixationAggregator
 from .gaze_to_screen import GazeMappingConfig, GazeToScreenMapper
@@ -62,7 +63,18 @@ def _load_estimator_kwargs() -> dict:
         kwargs["detect_size"] = int(data["detect_size"])
     if "ort_threads" in data:
         kwargs["ort_threads"] = int(data["ort_threads"])
+    if "eye_mesh" in data:
+        kwargs["eye_mesh"] = bool(data["eye_mesh"])
     return kwargs
+
+
+def _load_blink_min_ms() -> float:
+    if not CONFIG_PATH.exists():
+        return 450.0
+    import yaml
+
+    data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    return float(data.get("blink_min_ms", 450.0))
 
 
 class GazePipeline:
@@ -76,6 +88,9 @@ class GazePipeline:
         )
         self.mapper = GazeToScreenMapper(mapping_config)
         self.fixation = FixationAggregator(**_load_fixation_kwargs())
+        self.blink = BlinkDetector(min_ms=_load_blink_min_ms())
+        self.mouth = MouthOpenDetector(min_ms=_load_blink_min_ms() * 0.9)
+        self._last_mapped = None
 
     def stream(self) -> Iterator[dict[str, Any]]:
         last_time = time.monotonic()
@@ -90,6 +105,9 @@ class GazePipeline:
             if result is None:
                 self.mapper.reset()
                 self.fixation.reset()
+                self.blink.reset()
+                self.mouth.reset()
+                self._last_mapped = None
                 yield {
                     "gaze_x": None,
                     "gaze_y": None,
@@ -103,16 +121,37 @@ class GazePipeline:
                 }
                 continue
 
-            mapped = self.mapper.map(result.pitch, result.yaw, timestamp=now)
-            fixation_event = (
-                self.fixation.update(mapped.raw_x, mapped.raw_y, now)
-                if mapped.on_screen
-                else self.fixation.update(None, None, now)
-            )
+            blink = self.blink.update(result.ear, now)
+            mouth = self.mouth.update(result.mar, now)
+            hold_gaze = blink.eyes_closed or mouth.active  # gaze CNN output is unreliable while eyes are shut / jaw is open
+            if hold_gaze and self._last_mapped is not None:
+                # Eyes shut: the gaze CNN's output is garbage. Don't feed it to the
+                # mapper (its bias auto-centring would absorb it), the One Euro filter
+                # or the fixation window -- hold the last good point instead.
+                mapped = self._last_mapped
+            else:
+                mapped = self.mapper.map(result.pitch, result.yaw, timestamp=now)
+                self._last_mapped = mapped
+            if hold_gaze:
+                fixation_event = None
+            elif mapped.on_screen:
+                fixation_event = self.fixation.update(mapped.raw_x, mapped.raw_y, now)
+            else:
+                fixation_event = self.fixation.update(None, None, now)
             yield {
                 "gaze_x": mapped.smoothed_x,
                 "gaze_y": mapped.smoothed_y,
                 "on_keyboard": mapped.on_screen,
+                "ear": result.ear,
+                "eyes_closed": blink.eyes_closed,
+                "mar": result.mar,
+                "mouth_open": mouth.active,
+                "mouth_progress": mouth.progress,
+                "mouth_fired": mouth.fired,
+                "mouth_since": mouth.since,
+                "blink_progress": blink.progress,
+                "blink_fired": blink.fired,
+                "blink_closed_since": blink.closed_since,
                 "confidence": result.detection_confidence,
                 "selected_key": None,
                 "face_found": True,

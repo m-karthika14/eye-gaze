@@ -18,6 +18,14 @@ import onnxruntime as ort
 from uniface.constants import GazeWeights
 from uniface.detection import RetinaFace
 from uniface.gaze import MobileGaze
+from uniface.landmark import FaceMesh
+
+from .blink import eye_aspect_ratio, mouth_aspect_ratio
+
+# Below this EAR the eyes are shut (open is ~0.30). Used to keep tracking the face
+# through a closure: face detectors often lose a face whose eyes are closed.
+EAR_CLOSED_HINT = 0.20
+MAX_CLOSED_TRACK_FRAMES = 30
 
 
 @dataclass
@@ -27,6 +35,8 @@ class FaceGazeResult:
     pitch: float  # radians; + = looking up
     yaw: float  # radians; + = looking right
     landmarks: list[tuple[float, float]] | None = None
+    ear: float | None = None  # eye aspect ratio (openness) from the face mesh; None if blink detection is off
+    mar: float | None = None  # mouth aspect ratio (openness) from the face mesh
 
 
 def limit_onnx_threads(n: int) -> None:
@@ -72,15 +82,20 @@ class FaceGazeEstimator:
         detect_size: int = 320,
         detect_every: int = 4,
         ort_threads: int = 4,
+        eye_mesh: bool = True,
     ) -> None:
         limit_onnx_threads(ort_threads)
         self._detector = RetinaFace(input_size=(detect_size, detect_size))
         self._gaze = MobileGaze(model_name=gaze_model)
+        # Face mesh (468 pts) only for eye openness -> blink-to-select (vision/blink.py).
+        self._mesh = FaceMesh() if eye_mesh else None
         self._detect_every = max(1, detect_every)
         self._frames_since_detect = 0
         self._bbox: np.ndarray | None = None  # smoothed float x1,y1,x2,y2
         self._confidence = 0.0
         self._landmarks: list[tuple[float, float]] | None = None
+        self._last_ear: float | None = None
+        self._closed_frames = 0
 
     def reset_tracking(self) -> None:
         self._bbox = None
@@ -102,11 +117,36 @@ class FaceGazeEstimator:
             self._landmarks = [(float(pt[0]), float(pt[1])) for pt in face.landmarks]
         return True
 
+    def _mesh_features(self, frame: np.ndarray) -> tuple[float | None, float | None]:
+        if self._mesh is None or self._bbox is None:
+            return None, None
+        try:
+            kp = np.asarray(self._landmarks, dtype=np.float32) if self._landmarks else None
+            pts = self._mesh.get_landmarks(frame, self._bbox, kp)
+            return eye_aspect_ratio(pts), mouth_aspect_ratio(pts)
+        except Exception:  # noqa: BLE001 -- a bad mesh frame must not kill gaze tracking
+            return None, None
+
     def estimate(self, frame: np.ndarray) -> FaceGazeResult | None:
-        if self._bbox is None or self._frames_since_detect >= self._detect_every:
+        # While the eyes are shut, don't re-run the detector (it often loses a face with
+        # closed eyes) -- keep tracking the last box until they reopen.
+        eyes_shut = (
+            self._last_ear is not None
+            and self._last_ear < EAR_CLOSED_HINT
+            and self._closed_frames < MAX_CLOSED_TRACK_FRAMES
+        )
+        if self._bbox is None or (self._frames_since_detect >= self._detect_every and not eyes_shut):
             self._frames_since_detect = 0
+            previous_bbox = self._bbox
             if not self._detect(frame):
-                return None
+                # Detector found nothing. Either the face left, or the eyes just closed.
+                # Probe the previous box with the mesh: if it reads as eyes-closed, keep going.
+                self._bbox = previous_bbox
+                ear, _ = self._mesh_features(frame)
+                if previous_bbox is None or ear is None or ear >= EAR_CLOSED_HINT:
+                    self._bbox = None
+                    self._last_ear = None
+                    return None
         self._frames_since_detect += 1
 
         x1, y1, x2, y2 = (int(v) for v in self._bbox)
@@ -118,12 +158,18 @@ class FaceGazeEstimator:
 
         gaze = self._gaze.estimate(frame[y1:y2, x1:x2])
 
+        ear, mar = self._mesh_features(frame)
+        self._last_ear = ear
+        self._closed_frames = self._closed_frames + 1 if (ear is not None and ear < EAR_CLOSED_HINT) else 0
+
         return FaceGazeResult(
             bbox=(x1, y1, x2, y2),
             detection_confidence=self._confidence,
             pitch=float(gaze.pitch),
             yaw=float(gaze.yaw),
             landmarks=self._landmarks,
+            ear=ear,
+            mar=mar,
         )
 
 

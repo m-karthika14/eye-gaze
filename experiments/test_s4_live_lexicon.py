@@ -10,7 +10,7 @@ import random
 
 from decoder.lexicon import Lexicon
 from decoder.nearest_key import KeyboardLayout
-from decoder.s4_live import S4LiveDecoder
+from decoder.s4_live import RobustSpatialDwell, S4LiveDecoder
 from experiments.gaze_sequence import GazeObservation
 
 LAYOUT = KeyboardLayout.from_json()
@@ -97,7 +97,67 @@ def main() -> None:
     assert len(d.active_word_obs) == n - 1 and d.active_word == "help", (d.active_word, len(d.active_word_obs))
     print("[OK] BACKSPACE drops the last dwell observation and re-decodes ('helpx' -> 'help')")
 
-    print("\n[OK] all 5 live-decoder checks passed")
+    # 6. Dwell is robust to a couple of wild frames (blink / CNN glitch) mid-fixation...
+    dw = RobustSpatialDwell()
+    fired = None
+    for i in range(20):  # 20 fps, 1s on one spot; frames 8-9 are wild outliers
+        x, y = (0.9, 0.9) if i in (8, 9) else (0.45, 0.4)
+        out, _ = dw.update(x, y, i * 0.05)
+        fired = fired or out
+    assert fired is not None and abs(fired[0] - 0.45) < 0.01, fired
+    print("[OK] two outlier frames mid-dwell don't cancel the dwell, and don't bias its centre")
+
+    # ...but really moving to another key does abandon the old fixation.
+    dw = RobustSpatialDwell()
+    for i in range(6):
+        dw.update(0.45, 0.4, i * 0.05)
+    fired = None
+    for i in range(6, 40):
+        out, _ = dw.update(0.75, 0.4, i * 0.05)
+        fired = fired or out
+    assert fired is not None and abs(fired[0] - 0.75) < 0.01, fired
+    print("[OK] a sustained move starts a fresh fixation at the new key")
+
+    # 7. Hover highlight has hysteresis at key borders.
+    d = S4LiveDecoder(lexicon=lexicon)
+    first = d._sticky_hover(0.395, 0.125)  # inside R (x .30-.40)
+    held = d._sticky_hover(0.415, 0.125)  # just across the border into T -> still R
+    moved = d._sticky_hover(0.46, 0.125)  # clearly in T
+    assert (first, held, moved) == ("R", "R", "T"), (first, held, moved)
+    print("[OK] hovered key doesn't flicker across a border, but follows once clearly inside the next key")
+
+    # 8. Confirm-to-select: with dwell disabled, staring at keys types nothing;
+    #    select_now() types exactly the key being looked at.
+    d = S4LiveDecoder(lexicon=lexicon, dwell_ms=800.0)
+    d.dwell_enabled = False
+    t = 0.0
+    hx, hy = CENTERS["H"]
+    for _ in range(60):  # 3s of staring at H at 20 fps
+        t += 0.05
+        ev = d.process_sample(hx + 0.01, hy, t)
+        assert ev.selected_key is None
+    assert d.current_text == ""
+    ev = d.select_now(t)
+    assert ev.selected_key == "H" and len(d.active_word_obs) == 1, (ev.selected_key, d.active_word)
+    d.process_sample(None, None, t + 0.1)  # look away: no hover, no recent gaze -> nothing to select
+    assert d.select_now(t + 5.0).selected_key is None
+
+    # The highlighted key is final: confirming types exactly the letters highlighted,
+    # even a non-word where the decoder's word prior would love to "correct" it.
+    d = S4LiveDecoder(lexicon=lexicon)
+    d.dwell_enabled = False
+    t = 0.0
+    for ch in "qzx":
+        cx, cy = CENTERS[ch.upper()]
+        for _ in range(10):
+            t += 0.05
+            d.process_sample(cx + 0.03, cy, t)  # a bit off-centre but still inside the key
+        d.select_now(t)
+    assert d.active_word == "qzx", d.active_word
+    print("[OK] confirm types exactly the highlighted keys (non-word 'qzx' not 'corrected')")
+    print("[OK] with dwell off, staring selects nothing; select_now() selects the key being looked at")
+
+    print("\n[OK] all 9 live-decoder checks passed")
 
 
 if __name__ == "__main__":

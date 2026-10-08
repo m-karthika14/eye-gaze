@@ -54,6 +54,12 @@ export interface GazeMessage {
   yaw_deg?: number | null
   typing_paused?: boolean
   decoder_mode?: 's4' | 's0'
+  select_mode?: 'dwell' | 'switch' | 'blink' | 'mouth'
+  mouth_progress?: number
+  ear?: number | null
+  mar?: number | null
+  blink_progress?: number
+  eyes_closed?: boolean
   active_word?: string
   candidates?: string[]
   fps?: number

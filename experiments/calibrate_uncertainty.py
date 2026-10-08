@@ -59,11 +59,24 @@ TARGET_KEYS = ["Q", "P", "Z", "M", "D", "H", "A", "L", "T", "B", "SPACE", "BACKS
 # 3 repeats proved too few in practice: real per-key data showed single
 # trials swinging 2-3x from their siblings (webcam appearance-based gaze
 # noise, not a bug), so the median/robust estimators below didn't have
-# enough samples per key to average that out.
-REPEATS = 6
+# enough samples per key to average that out. 3 x 12 keys = 36 trials, ~2.5 min.
+REPEATS = 3
 
-TARGET_FIXATION_MS = 600.0  # how long we wait for a fixation to accumulate before recording it
-SETTLE_TIMEOUT_S = 8.0  # give up on a trial if no stable fixation forms in this long
+# A recorded trial must be a steady fixation of at least this long AND contain
+# at least MIN_FIXATION_SAMPLES gaze samples. The sample floor is what actually
+# protects against a slow pipeline: the previous 400ms / no-floor setting
+# recorded "fixations" of 2 frames each when the pipeline ran at ~3 fps, so
+# every trial was effectively a single noisy reading.
+TARGET_FIXATION_MS = 500.0
+MIN_FIXATION_SAMPLES = 4  # the aggregator keeps <=800ms, so this still needs >= ~5 fps
+SETTLE_TIMEOUT_S = 7.0  # give up on a trial if no stable fixation forms in 7s
+# The target appears, then the eye needs time to travel there (saccade +
+# camera/inference latency). Anything the fixation aggregator saw before this
+# is the *previous* target (or the transit) -- discard it. Without this a trial
+# could record the old target's fixation the instant the new one appeared,
+# which is exactly what the pre-existing calibration file shows (gaze-vs-target
+# correlation ~0.2-0.3, with the strongest correlation at a one-trial lag).
+SETTLE_DELAY_S = 0.9
 
 
 def draw_prompt(layout: KeyboardLayout, target_id: str, status: str) -> np.ndarray:
@@ -140,7 +153,15 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
                     cv2.destroyAllWindows()
                     return samples
 
-                if fixation is not None and fixation.duration_ms >= TARGET_FIXATION_MS:
+                if elapsed < SETTLE_DELAY_S:
+                    pipeline.fixation.reset()  # drop transit / previous-target samples
+                    continue
+
+                if (
+                    fixation is not None
+                    and fixation.duration_ms >= TARGET_FIXATION_MS
+                    and fixation.n_samples >= MIN_FIXATION_SAMPLES
+                ):
                     samples.append(
                         {
                             "target_key": target_id,
@@ -343,6 +364,65 @@ def analyze_range(samples: list[dict]) -> tuple[float, float] | None:
     if len(yaw_estimates) < 4 or len(pitch_estimates) < 4:
         return None
     return statistics.median(yaw_estimates), statistics.median(pitch_estimates)
+
+
+def fit_affine(samples: list[dict], ridge: float = 1e-4, min_trials: int = 12) -> dict | None:
+    """Least-squares fit of the true target position from the bias-corrected
+    gaze angles recorded at each trial:  x = c0 + c1*yaw + c2*pitch, y likewise.
+
+    This learns the sign, scale, intercept and yaw/pitch cross-talk of THIS model
+    on THIS setup directly, instead of the hand-set invert flags and half_fov range
+    (which were wrong by a sign after the gaze CNN was swapped, and carried a
+    +0.17 vertical bias). Validated leave-one-out; returns None (caller keeps the
+    heuristic mapping) when there are too few trials or the fit isn't clearly
+    better than what the trials were recorded with.
+
+    Returns {"affine_x", "affine_y", "loo_rmse", "raw_rmse", "loo_mu": [(x, y)...]}.
+    """
+    usable = [s for s in samples if "rel_yaw" in s and "rel_pitch" in s]
+    if len(usable) < min_trials:
+        return None
+    feats = np.array([[1.0, s["rel_yaw"], s["rel_pitch"]] for s in usable])
+    truth = np.array([[s["true_x"], s["true_y"]] for s in usable])
+    raw = np.array([[s["mu_x"], s["mu_y"]] for s in usable])
+
+    def solve(f: np.ndarray, t: np.ndarray) -> np.ndarray:
+        return np.linalg.solve(f.T @ f + ridge * np.eye(3), f.T @ t)
+
+    loo = np.zeros_like(truth)
+    for i in range(len(usable)):
+        keep = np.arange(len(usable)) != i
+        loo[i] = feats[i] @ solve(feats[keep], truth[keep])
+    loo_rmse = float(np.sqrt(((loo - truth) ** 2).sum(axis=1).mean()))
+    raw_rmse = float(np.sqrt(((raw - truth) ** 2).sum(axis=1).mean()))
+    if loo_rmse > 0.35 or loo_rmse > 0.9 * raw_rmse:
+        return None
+    w = solve(feats, truth)
+    return {
+        "affine_x": [round(float(v), 4) for v in w[:, 0]],
+        "affine_y": [round(float(v), 4) for v in w[:, 1]],
+        "loo_rmse": loo_rmse,
+        "raw_rmse": raw_rmse,
+        "loo_mu": [(float(a), float(b)) for a, b in loo],
+    }
+
+
+def with_corrected_mu(samples: list[dict], fit: dict) -> list[dict]:
+    """Samples with mu_x/mu_y replaced by the leave-one-out affine prediction --
+    what the learned mapping would have produced -- so the dashboard and
+    sigma_scale describe the mapping that will actually be used."""
+    usable = [s for s in samples if "rel_yaw" in s and "rel_pitch" in s]
+    return [dict(s, mu_x=x, mu_y=y) for s, (x, y) in zip(usable, fit["loo_mu"])]
+
+
+def write_back_affine(affine_x: list[float], affine_y: list[float]) -> None:
+    with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
+        data = yaml.load(f)
+    data["affine_x"] = affine_x
+    data["affine_y"] = affine_y
+    with open(GAZE_MAPPING_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    print(f"[OK] wrote affine_x={affine_x}, affine_y={affine_y} to {GAZE_MAPPING_PATH}")
 
 
 def write_back(sigma_scale: float) -> None:

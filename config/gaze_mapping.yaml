@@ -11,11 +11,8 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.1802  # measured directly from raw yaw output: ~10-12deg real swing (was 0.2968,
-                          # which caused the "stuck in the middle" undershoot on the horizontal axis)
-half_fov_pitch_rad: 0.1217 # measured directly from raw pitch output: real swing is asymmetric
-                          # (up ~14deg, down ~7deg) -- set below the smaller (down) side so it
-                          # doesn't undershoot; auto-expansion grows it toward 14deg on an upward glance
+half_fov_yaw_rad: 0.1692   # comfortable laptop horizontal swing (~13 deg)
+half_fov_pitch_rad: 0.2211 # increased from 0.1217 to prevent premature saturation to bottom keys (~13 deg)
 invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking
                           # left produced MORE POSITIVE yaw, looking right produced MORE NEGATIVE yaw --
                           # backwards from the documented convention, specific to this setup
@@ -49,3 +46,28 @@ drift_max_alpha: 0.2     # per-update cap, so one long pause/gap can't snap the 
 filter_min_cutoff: 1.0
 filter_beta: 3.0
 filter_d_cutoff: 1.0
+
+# Vision speed (vision/face_gaze.py). The original setup (RetinaFace at 640x640 +
+# ResNet34 gaze, detector on every frame) measured ~3 fps on this machine, i.e. only
+# ~2 samples per 600ms dwell. These settings give ~20 fps. To go back to the old
+# behaviour: gaze_model: RESNET34, detect_every: 1, detect_size: 640.
+# gaze_model is any uniface GazeWeights name: MOBILEONE_S0 (30ms), MOBILENET_V2 (45ms),
+# RESNET18 (94ms), RESNET34 (142ms), RESNET50 (132ms). Changing it shifts the model's
+# resting pitch/yaw bias, so press C (recenter) or re-run Calibrate afterwards.
+gaze_model: MOBILEONE_S0
+detect_every: 4
+detect_size: 320
+# ONNX Runtime thread cap. The ORT default measured 344 ms/frame for the gaze CNN on this
+# 8-logical-core hybrid CPU vs 14 ms with 4 threads. 0 = ORT default.
+ort_threads: 4
+# Learned by Calibrate (experiments/calibrate_uncertainty.py fit_affine): x = c0 + c1*rel_yaw + c2*rel_pitch.
+# While these two are present they REPLACE half_fov_*/invert_x/invert_y above (the Invert buttons in the
+# app do nothing). Delete both keys to go back to the heuristic mapping.
+affine_x:
+- 0.4834
+- 1.9482
+- 0.3275
+affine_y:
+- 0.3374
+- 0.1049
+- -2.2159

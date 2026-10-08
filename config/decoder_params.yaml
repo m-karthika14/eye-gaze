@@ -8,6 +8,7 @@ fixation:
   # selection-event distribution (Section 8, Stage 2/4).
   min_window_ms: 200
   max_window_ms: 800
+  fixation_radius: 0.18
 
 gaze_uncertainty:
   # sigma_x/sigma_y come from vision/fixation.py's per-fixation temporal
@@ -24,8 +25,15 @@ gaze_uncertainty:
   # README and the commit history for what was investigated and fixed
   # along the way (a warm-up-window artifact, and a mapping range that had
   # gotten stuck too wide -- both real bugs, now fixed).
-  sigma_scale: 25.3342
+  sigma_scale: 2.0304
   calibrated: true  # true once calibrate_uncertainty.py has been run against real data
+  # Live S4 decoder (decoder/s4_live.py) per-dwell sigma bounds, in normalized
+  # screen units (0.10 = one key width): sigma = clip(dwell_scatter * sigma_scale,
+  # floor, ceiling). The floor is the real webcam imprecision (~1 key); the ceiling
+  # stops a large sigma_scale flattening the gaze term so far that the language
+  # prior alone picks the word. Re-tune after re-running Calibrate.
+  live_sigma_floor: 0.08
+  live_sigma_ceiling: 0.12
 
 decoder:
   # Joint noisy-channel decoder (S4): P(T|G) ~ P(G|T) * P(T)

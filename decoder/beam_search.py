@@ -19,11 +19,15 @@ def beam_search_decode(
     char_likelihoods: list[dict[str, float]],
     char_lm: CharLM,
     beam_width: int = 8,
+    initial_prefix: str = "",
+    lm_weight: float = 0.25,
 ) -> str:
     """char_likelihoods[i] maps a candidate character to P(G_i | that
     character) for the i-th gaze observation. Returns the text with the
-    highest Sum_i [log P(G_i|T_i) + log P(T_i | T_<i)]."""
-    beams: list[tuple[str, float]] = [("", 0.0)]
+    highest Sum_i [log P(G_i|T_i) + lm_weight * log P(T_i | T_<i)].
+    If initial_prefix is provided, LM conditioning begins with initial_prefix,
+    and only the newly decoded suffix is returned."""
+    beams: list[tuple[str, float]] = [(initial_prefix, 0.0)]
 
     for likelihoods in char_likelihoods:
         candidates: list[tuple[str, float]] = []
@@ -32,11 +36,12 @@ def beam_search_decode(
             for char, gaze_p in likelihoods.items():
                 if gaze_p <= 0.0:
                     continue
-                new_score = score + math.log(gaze_p) + math.log(next_probs[char])
+                new_score = score + math.log(gaze_p) + lm_weight * math.log(next_probs[char])
                 candidates.append((text + char, new_score))
         candidates.sort(key=lambda item: -item[1])
         beams = candidates[:beam_width]
 
     if not beams:
         return ""
-    return max(beams, key=lambda item: item[1])[0]
+    best = max(beams, key=lambda item: item[1])[0]
+    return best[len(initial_prefix):]

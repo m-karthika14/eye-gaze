@@ -64,6 +64,11 @@ class MappedGaze:
     raw_y: float
     smoothed_x: float  # post-One-Euro-Filter -- use for cursor display and S0's dwell mechanic
     smoothed_y: float
+    # False when the UNCLAMPED mapped point lies beyond the keyboard by more than
+    # offscreen_margin (e.g. glancing at the text box above it). The x/y values are
+    # still clamped to [0,1] for display, which alone would make such a glance look
+    # like a fixation on the nearest edge key and select stray letters.
+    on_screen: bool = True
 
 
 @dataclass
@@ -80,6 +85,13 @@ class GazeMappingConfig:
     drift_correction_enabled: bool = True  # continuous post-lock bias adaptation (Phase 7 slice); see module docstring
     drift_tau_s: float = 30.0  # time constant of the chase -- long enough that no single key's dwell moves it
     drift_max_alpha: float = 0.2  # per-update cap, so one long pause/gap can't snap the bias to a single sample
+    # Learned screen mapping from Calibrate (experiments/calibrate_uncertainty.py fit_affine):
+    #   x = c0 + c1*rel_yaw + c2*rel_pitch ; y likewise, [c0, c1, c2] each.
+    # When both are set they REPLACE the heuristic range/invert mapping below (the fit already
+    # contains the sign, scale, intercept and yaw/pitch cross-talk for this model + setup).
+    offscreen_margin: float = 0.06  # how far past the keyboard edge (normalized) gaze may stray and still count as on a key
+    affine_x: list[float] | None = None
+    affine_y: list[float] | None = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -152,19 +164,34 @@ class GazeToScreenMapper:
         self._filter_x.reset()
         self._filter_y.reset()
 
-    def recenter(self) -> None:
-        """Re-run startup auto-centering and range expansion (e.g. if the user's setup changed)."""
-        self._bias_pitch = 0.0
-        self._bias_yaw = 0.0
-        self._bias_samples = []
-        self._bias_locked = False
-        self._range_yaw = self.config.half_fov_yaw_rad
-        self._range_pitch = self.config.half_fov_pitch_rad
-        self._last_drift_ts = None
+    def recenter(self, pitch: float | None = None, yaw: float | None = None) -> None:
+        """Immediately locks bias to the current gaze angle so (0.5, 0.5) centers on screen."""
+        p = pitch if pitch is not None else getattr(self, "_last_raw_pitch", None)
+        y = yaw if yaw is not None else getattr(self, "_last_raw_yaw", None)
+        if p is not None and y is not None:
+            self._bias_pitch = p
+            self._bias_yaw = y
+            self._bias_locked = True
+            self._range_yaw = self.config.half_fov_yaw_rad
+            self._range_pitch = self.config.half_fov_pitch_rad
+            self._last_drift_ts = None
+            self._filter_x.reset()
+            self._filter_y.reset()
+        else:
+            self._bias_pitch = 0.0
+            self._bias_yaw = 0.0
+            self._bias_samples = []
+            self._bias_locked = False
+            self._range_yaw = self.config.half_fov_yaw_rad
+            self._range_pitch = self.config.half_fov_pitch_rad
+            self._last_drift_ts = None
 
     def map(self, pitch: float, yaw: float, timestamp: float) -> MappedGaze:
         cfg = self.config
+        self._last_raw_pitch = pitch
+        self._last_raw_yaw = yaw
 
+        on_screen = True
         if not self._bias_locked:
             self._bias_samples.append((pitch, yaw))
             if len(self._bias_samples) >= cfg.startup_bias_frames:
@@ -193,15 +220,22 @@ class GazeToScreenMapper:
             self._range_yaw = min(max(self._range_yaw, abs(rel_yaw)), cfg.max_range_rad)
             self._range_pitch = min(max(self._range_pitch, abs(rel_pitch)), cfg.max_range_rad)
 
-            raw_x = 0.5 + 0.5 * (rel_yaw / self._range_yaw)
-            raw_y = 0.5 - 0.5 * (rel_pitch / self._range_pitch)
-            if cfg.invert_x:
-                raw_x = 1.0 - raw_x
-            if cfg.invert_y:
-                raw_y = 1.0 - raw_y
+            if cfg.affine_x and cfg.affine_y and len(cfg.affine_x) == 3 and len(cfg.affine_y) == 3:
+                ax, ay = cfg.affine_x, cfg.affine_y
+                raw_x = ax[0] + ax[1] * rel_yaw + ax[2] * rel_pitch
+                raw_y = ay[0] + ay[1] * rel_yaw + ay[2] * rel_pitch
+            else:
+                raw_x = 0.5 + 0.5 * (rel_yaw / self._range_yaw)
+                raw_y = 0.5 - 0.5 * (rel_pitch / self._range_pitch)
+                if cfg.invert_x:
+                    raw_x = 1.0 - raw_x
+                if cfg.invert_y:
+                    raw_y = 1.0 - raw_y
+            m = cfg.offscreen_margin
+            on_screen = -m <= raw_x <= 1.0 + m and -m <= raw_y <= 1.0 + m
             raw_x = min(max(raw_x, 0.0), 1.0)
             raw_y = min(max(raw_y, 0.0), 1.0)
 
         smoothed_x = self._filter_x.filter(timestamp, raw_x)
         smoothed_y = self._filter_y.filter(timestamp, raw_y)
-        return MappedGaze(raw_x=raw_x, raw_y=raw_y, smoothed_x=smoothed_x, smoothed_y=smoothed_y)
+        return MappedGaze(raw_x=raw_x, raw_y=raw_y, smoothed_x=smoothed_x, smoothed_y=smoothed_y, on_screen=on_screen)

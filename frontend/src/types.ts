@@ -47,6 +47,17 @@ export interface GazeMessage {
   key_layout: Record<string, KeyGeometry> | null
   suggestions: string[]
   low_confidence_veto?: boolean
+  invert_x?: boolean
+  invert_y?: boolean
+  face_found?: boolean
+  pitch_deg?: number | null
+  yaw_deg?: number | null
+  typing_paused?: boolean
+  decoder_mode?: 's4' | 's0'
+  active_word?: string
+  candidates?: string[]
+  fps?: number
+  infer_ms?: number
   error?: string
 }
 

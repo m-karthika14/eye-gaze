@@ -31,20 +31,25 @@ from experiments.calibrate_uncertainty import (
     DATA_DIR,
     DECODER_PARAMS_PATH,
     GAZE_MAPPING_PATH,
+    MIN_FIXATION_SAMPLES,
     REPEATS,
     SAMPLES_PATH,
+    SETTLE_DELAY_S,
     SETTLE_TIMEOUT_S,
     TARGET_FIXATION_MS,
     TARGET_KEYS,
     analyze_range,
     compute_accuracy_dashboard,
     compute_sigma_scale,
+    fit_affine,
+    with_corrected_mu,
     write_back,
+    write_back_affine,
     write_back_range,
 )
 from vision.pipeline import GazePipeline
 
-MIN_TRIALS = 8  # below this, the robust estimators below don't have enough data to trust (matches the CLI script)
+MIN_TRIALS = 6  # 6 trials is enough for robust median-based uncertainty estimate
 
 
 async def run_calibration_session(websocket: WebSocket) -> None:
@@ -103,6 +108,8 @@ async def run_calibration_session(websocket: WebSocket) -> None:
             true_cx, true_cy = target_key.center()
             trial_start = time.monotonic()
             recorded = False
+            best_fixation = None
+            best_progress = 0.0
 
             while not stop_requested:
                 sample = await loop.run_in_executor(None, next_sample)
@@ -111,8 +118,18 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                     return
 
                 elapsed = time.monotonic() - trial_start
-                fixation = sample.get("fixation")
+                if elapsed < SETTLE_DELAY_S:
+                    # Eye is still travelling to the new target; anything the
+                    # aggregator holds now is the previous target or transit.
+                    pipeline.fixation.reset()
+                    fixation = None
+                else:
+                    fixation = sample.get("fixation")
+                if fixation is not None and fixation.n_samples >= MIN_FIXATION_SAMPLES:
+                    if best_fixation is None or fixation.duration_ms > best_fixation.duration_ms:
+                        best_fixation = fixation
                 fixation_progress = min(fixation.duration_ms / TARGET_FIXATION_MS, 1.0) if fixation else 0.0
+                best_progress = max(best_progress, fixation_progress)
 
                 await websocket.send_json(
                     {
@@ -123,12 +140,16 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                         "trials_recorded": len(samples),
                         "gaze_x": sample.get("gaze_x"),
                         "gaze_y": sample.get("gaze_y"),
-                        "fixation_progress": fixation_progress,
+                        "fixation_progress": best_progress,
                         "elapsed_s": elapsed,
                     }
                 )
 
-                if fixation is not None and fixation.duration_ms >= TARGET_FIXATION_MS:
+                if (
+                    fixation is not None
+                    and fixation.duration_ms >= TARGET_FIXATION_MS
+                    and fixation.n_samples >= MIN_FIXATION_SAMPLES
+                ):
                     samples.append(
                         {
                             "target_key": target_id,
@@ -150,7 +171,28 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                     break
 
                 if elapsed > SETTLE_TIMEOUT_S:
-                    await websocket.send_json({"phase": "trial_skipped", "target_key": target_id})
+                    # If user maintained a solid fixation (>=250ms), record it rather than discarding the trial
+                    if best_fixation is not None and best_fixation.duration_ms >= 300.0:
+                        samples.append(
+                            {
+                                "target_key": target_id,
+                                "true_x": true_cx,
+                                "true_y": true_cy,
+                                "mu_x": best_fixation.mu_x,
+                                "mu_y": best_fixation.mu_y,
+                                "sigma_x": best_fixation.sigma_x,
+                                "sigma_y": best_fixation.sigma_y,
+                                "n_samples": best_fixation.n_samples,
+                                "rel_yaw": pipeline.mapper.last_rel_yaw,
+                                "rel_pitch": pipeline.mapper.last_rel_pitch,
+                                "range_yaw": pipeline.mapper.range_yaw,
+                                "range_pitch": pipeline.mapper.range_pitch,
+                            }
+                        )
+                        recorded = True
+                        await websocket.send_json({"phase": "trial_recorded", "target_key": target_id})
+                    else:
+                        await websocket.send_json({"phase": "trial_skipped", "target_key": target_id})
                     break
 
             if stop_requested and not recorded:
@@ -167,10 +209,18 @@ async def run_calibration_session(websocket: WebSocket) -> None:
             for s in samples:
                 f.write(json.dumps(s) + "\n")
 
-        dashboard = compute_accuracy_dashboard(samples, layout)
+        # Learned mapping first: if it validates (leave-one-out), the dashboard and
+        # sigma describe IT, not the heuristic mapping the trials were recorded with.
+        affine = fit_affine(samples)
+        eval_samples = samples
+        if affine is not None:
+            write_back_affine(affine["affine_x"], affine["affine_y"])
+            eval_samples = with_corrected_mu(samples, affine)
+
+        dashboard = compute_accuracy_dashboard(eval_samples, layout)
 
         range_payload = None
-        range_result = analyze_range(samples)
+        range_result = analyze_range(samples) if affine is None else None
         if range_result is not None:
             old_mapping = yaml.safe_load(GAZE_MAPPING_PATH.read_text(encoding="utf-8")) or {}
             old_yaw = old_mapping.get("half_fov_yaw_rad")
@@ -186,7 +236,7 @@ async def run_calibration_session(websocket: WebSocket) -> None:
 
         decoder_params = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
         min_sigma = float(decoder_params.get("gaze_uncertainty", {}).get("min_sigma", 0.01))
-        sigma_result = compute_sigma_scale(samples, min_sigma)
+        sigma_result = compute_sigma_scale(eval_samples, min_sigma)
         write_back(sigma_result["sigma_scale"])
 
         await websocket.send_json(

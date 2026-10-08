@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+import math
 from pathlib import Path
+import time
 
-import yaml
+import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import yaml
 
 from backend.adaptive_layout import accept_suggestion, compute_adaptive_layout
 from backend.calibration import run_calibration_session
@@ -29,7 +32,9 @@ from decoder.char_lm import CharLM
 from decoder.key_probability import DEFAULT_MIN_SIGMA, key_probabilities
 from decoder.nearest_key import DEFAULT_LAYOUT_PATH, KeyboardLayout
 from experiments.s0 import S0Event, S0System
+from decoder.s4_live import S4LiveDecoder
 from llm_services.word_suggestions import WordSuggester
+from vision.face_gaze import annotate_eye_tracker_frame
 from vision.pipeline import GazePipeline
 
 DECODER_PARAMS_PATH = Path(__file__).resolve().parent.parent / "config" / "decoder_params.yaml"
@@ -63,9 +68,38 @@ def _load_uncertainty_config() -> tuple[float, float, float]:
     )
 
 
+def _load_live_sigma_bounds() -> tuple[float, float]:
+    """Floor/ceiling for the S4 live decoder's per-dwell gaze sigma -- see
+    decoder/s4_live.py and config/decoder_params.yaml."""
+    if not DECODER_PARAMS_PATH.exists():
+        return 0.08, 0.12
+    data = yaml.safe_load(DECODER_PARAMS_PATH.read_text(encoding="utf-8")) or {}
+    cfg = data.get("gaze_uncertainty", {})
+    return float(cfg.get("live_sigma_floor", 0.08)), float(cfg.get("live_sigma_ceiling", 0.12))
+
+
+latest_preview_jpeg: bytes | None = None
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/video_feed")
+def video_feed() -> StreamingResponse:
+    """Streams live webcam frames with face mesh, blue eyeball tracking dots,
+    and gaze vectors as a multipart MJPEG stream for the frontend preview."""
+    def frame_stream():
+        while True:
+            if latest_preview_jpeg is not None:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + latest_preview_jpeg + b"\r\n"
+                )
+            time.sleep(0.033)
+
+    return StreamingResponse(frame_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.get("/config/keyboard-layout")
@@ -94,13 +128,15 @@ async def ws_gaze(websocket: WebSocket) -> None:
     min_sigma, sigma_scale, min_confidence_threshold = _load_uncertainty_config()
 
     s0 = S0System(layout=_layout)
+    sigma_floor, sigma_ceiling = _load_live_sigma_bounds()
+    s4 = S4LiveDecoder(layout=_layout, char_lm=_char_lm, sigma_floor=sigma_floor, sigma_ceiling=sigma_ceiling)
+    fps_ema = 0.0
     loop = asyncio.get_event_loop()
     stream = pipeline.stream()
 
-    # Phase 6 state. adaptive_keyboard defaults on; the frontend can send
-    # {"adaptive_keyboard": false} at any point to fall back to the pure S0
-    # static-keyboard behaviour (e.g. for a live S1-vs-S4-style comparison).
-    settings = {"adaptive_keyboard": True}
+    # Phase 6 state. adaptive_keyboard defaults OFF per user request (no merging keys)
+    # decoder_mode defaults to "s4" (joint probabilistic LM beam search)
+    settings = {"adaptive_keyboard": False, "decoder_mode": "s4"}
     last_layout_text: str | None = None
     key_layout_payload: dict | None = None
     suggestions: list[str] = []
@@ -113,6 +149,33 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 msg = await websocket.receive_json()
                 if "adaptive_keyboard" in msg:
                     settings["adaptive_keyboard"] = bool(msg["adaptive_keyboard"])
+                if "decoder_mode" in msg:
+                    dm = str(msg["decoder_mode"]).lower()
+                    if dm in ("s0", "s4"):
+                        if dm != settings.get("decoder_mode"):
+                            if dm == "s4":
+                                s4.set_text(s0.buffer.text)
+                            else:
+                                s0.buffer.reset()
+                                s0.buffer.text = s4.current_text
+                        settings["decoder_mode"] = dm
+                if msg.get("clear_text"):
+                    s0.reset()
+                    s4.reset()
+                if "pick_candidate" in msg and settings.get("decoder_mode") == "s4":
+                    s4.pick_candidate(int(msg["pick_candidate"]))
+                if msg.get("recenter"):
+                    pipeline.mapper.recenter()
+                if "invert_x" in msg:
+                    pipeline.mapper.config.invert_x = bool(msg["invert_x"])
+                if "invert_y" in msg:
+                    pipeline.mapper.config.invert_y = bool(msg["invert_y"])
+                if "pause_typing" in msg:
+                    settings["typing_paused"] = bool(msg["pause_typing"])
+                if "pitch_sensitivity" in msg:
+                    pipeline.mapper._range_pitch = max(0.08, min(0.6, float(msg["pitch_sensitivity"])))
+                if "yaw_sensitivity" in msg:
+                    pipeline.mapper._range_yaw = max(0.08, min(0.6, float(msg["yaw_sensitivity"])))
         except Exception:  # noqa: BLE001 -- connection closing; main loop exits too
             pass
 
@@ -138,9 +201,36 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 )
                 break
 
+            # Update live eye tracker preview frame with facial mesh and blue eyeball dots
+            global latest_preview_jpeg
+            raw_frame = sample.get("frame")
+            if raw_frame is not None:
+                face_res = sample.get("face_result")
+                p_rad = sample.get("pitch")
+                y_rad = sample.get("yaw")
+                p_d = math.degrees(p_rad) if p_rad is not None else None
+                y_d = math.degrees(y_rad) if y_rad is not None else None
+                g_pt = (sample["gaze_x"], sample["gaze_y"]) if sample["gaze_x"] is not None else None
+                vis = annotate_eye_tracker_frame(
+                    raw_frame,
+                    face_res,
+                    pitch_deg=p_d,
+                    yaw_deg=y_d,
+                    gaze_screen_pt=g_pt,
+                )
+                vis_small = cv2.resize(vis, (320, 240))
+                ret, buf = cv2.imencode(".jpg", vis_small, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                if ret:
+                    latest_preview_jpeg = buf.tobytes()
+
+            sample_fps = sample.get("fps")
+            if sample_fps:
+                fps_ema = sample_fps if fps_ema == 0.0 else 0.9 * fps_ema + 0.1 * sample_fps
+
             adaptive_on = settings["adaptive_keyboard"]
             if not adaptive_on and s0.layout is not _layout:
                 s0.layout = _layout
+                s4.layout = _layout
                 last_layout_text = None
                 key_layout_payload = None
 
@@ -165,7 +255,33 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "duration_ms": fixation.duration_ms,
                 }
 
-            event = s0.process_sample(sample["gaze_x"], sample["gaze_y"], time.monotonic())
+            decoder_mode = settings.get("decoder_mode", "s4")
+            now_ts = time.monotonic()
+            # Gaze that has left the keyboard (e.g. reading the text box above it)
+            # must not dwell on the clamped edge key -- treat it as no gaze.
+            if sample.get("on_keyboard", True):
+                dwell_x, dwell_y = sample["gaze_x"], sample["gaze_y"]
+            else:
+                dwell_x, dwell_y = None, None
+            if decoder_mode == "s4":
+                event = s4.process_sample(
+                    dwell_x,
+                    dwell_y,
+                    now_ts,
+                    min_sigma=min_sigma,
+                    sigma_scale=sigma_scale,
+                )
+            else:
+                event = s0.process_sample(dwell_x, dwell_y, now_ts)
+
+            # When typing is paused (testing / eyeball tracking mode), do not commit key selections
+            if settings.get("typing_paused"):
+                event = S0Event(
+                    text=s4.current_text if decoder_mode == "s4" else s0.buffer.text,
+                    selected_key=None,
+                    hovered_key=event.hovered_key,
+                    dwell_progress=event.dwell_progress,
+                )
 
             low_confidence_veto = False
             if (
@@ -176,11 +292,15 @@ async def ws_gaze(websocket: WebSocket) -> None:
             ):
                 # Phase 8's low-confidence fallback, pulled forward: don't
                 # force a character out of a distribution the system itself
-                # isn't confident about -- undo what S0 just committed and
-                # wait for a clearer fixation instead of guessing.
-                s0.buffer.apply_key("BACKSPACE")
+                # isn't confident about -- undo what was just committed.
+                if decoder_mode == "s4":
+                    if s4.active_word_obs:
+                        s4.active_word_obs.pop()
+                        s4.active_word = s4._decode_active(min_sigma=min_sigma)
+                else:
+                    s0.buffer.apply_key("BACKSPACE")
                 event = S0Event(
-                    text=s0.buffer.text,
+                    text=s4.current_text if decoder_mode == "s4" else s0.buffer.text,
                     selected_key=None,
                     hovered_key=event.hovered_key,
                     dwell_progress=event.dwell_progress,
@@ -188,25 +308,21 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 low_confidence_veto = True
 
             if adaptive_on:
-                # SPACE accepts the top suggestion mid-word instead of a
-                # literal space -- the standard predictive-keyboard pattern,
-                # and the only gaze-driven way to accept a suggestion (see
-                # experiments/s1.py's sibling docstrings for why: adding a
-                # new gaze-interactive region would change calibrated
-                # geometry; reusing the existing SPACE key doesn't).
                 if event.selected_key == "SPACE" and suggestions and pending_prefix and suggestions[0] != pending_prefix:
-                    accept_suggestion(s0.buffer, pending_prefix, suggestions[0])
-                    event = S0Event(
-                        text=s0.buffer.text,
-                        selected_key="SPACE",
-                        hovered_key=event.hovered_key,
-                        dwell_progress=event.dwell_progress,
-                    )
+                    if decoder_mode == "s0":
+                        accept_suggestion(s0.buffer, pending_prefix, suggestions[0])
+                        event = S0Event(
+                            text=s0.buffer.text,
+                            selected_key="SPACE",
+                            hovered_key=event.hovered_key,
+                            dwell_progress=event.dwell_progress,
+                        )
                     suggestions = []
                     suggestion_task = None
 
                 if event.text != last_layout_text:
                     s0.layout = compute_adaptive_layout(_layout, _char_lm, event.text)
+                    s4.layout = s0.layout
                     last_layout_text = event.text
                     key_layout_payload = _layout_payload(s0.layout)
 
@@ -215,15 +331,13 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     suggestions = []  # stale after an edit
                 if event.selected_key not in ("SPACE", "BACKSPACE", None) and current_word:
                     if suggestion_task is None or suggestion_task.done():
-                        # run_in_executor already returns an awaitable Future
-                        # (not a coroutine) -- no create_task() wrapper needed.
                         suggestion_task = loop.run_in_executor(None, fetch_suggestions, current_word, event.text)
                 if suggestion_task is not None and suggestion_task.done():
                     try:
                         suggestions = suggestion_task.result()
-                    except Exception:  # noqa: BLE001 -- a failed suggestion fetch just means no suggestions
+                    except Exception:  # noqa: BLE001
                         suggestions = []
-                pending_prefix = current_word
+                    pending_prefix = current_word
             else:
                 key_layout_payload = None
                 suggestions = []
@@ -237,11 +351,22 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "hovered_key": event.hovered_key,
                     "dwell_progress": event.dwell_progress,
                     "text": event.text,
+                    "decoder_mode": decoder_mode,
+                    "active_word": s4.active_word if decoder_mode == "s4" else "",
+                    "candidates": s4.candidates if decoder_mode == "s4" else [],
+                    "fps": round(fps_ema, 1),
+                    "infer_ms": round(sample.get("infer_ms") or 0.0),
                     "fixation": fixation_payload,
                     "key_probabilities": key_probs,
                     "key_layout": key_layout_payload,
                     "suggestions": suggestions,
                     "low_confidence_veto": low_confidence_veto,
+                    "invert_x": pipeline.mapper.config.invert_x,
+                    "invert_y": pipeline.mapper.config.invert_y,
+                    "face_found": sample.get("face_found", False),
+                    "pitch_deg": round(math.degrees(sample.get("pitch", 0.0)), 1) if sample.get("pitch") is not None else None,
+                    "yaw_deg": round(math.degrees(sample.get("yaw", 0.0)), 1) if sample.get("yaw") is not None else None,
+                    "typing_paused": settings.get("typing_paused", False),
                 }
             )
     except WebSocketDisconnect:

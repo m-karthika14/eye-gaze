@@ -39,13 +39,36 @@ def _load_fixation_kwargs() -> dict[str, float]:
         kwargs["min_window_ms"] = float(fixation_cfg["min_window_ms"])
     if "max_window_ms" in fixation_cfg:
         kwargs["max_window_ms"] = float(fixation_cfg["max_window_ms"])
+    if "fixation_radius" in fixation_cfg:
+        kwargs["fixation_radius"] = float(fixation_cfg["fixation_radius"])
+    return kwargs
+
+
+def _load_estimator_kwargs() -> dict:
+    """Optional `gaze_model` / `detect_every` / `detect_size` keys in
+    config/gaze_mapping.yaml (unknown keys are ignored by GazeMappingConfig)."""
+    if not CONFIG_PATH.exists():
+        return {}
+    import yaml
+    from uniface.constants import GazeWeights
+
+    data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    kwargs: dict = {}
+    if "gaze_model" in data:
+        kwargs["gaze_model"] = GazeWeights[str(data["gaze_model"]).upper()]
+    if "detect_every" in data:
+        kwargs["detect_every"] = int(data["detect_every"])
+    if "detect_size" in data:
+        kwargs["detect_size"] = int(data["detect_size"])
+    if "ort_threads" in data:
+        kwargs["ort_threads"] = int(data["ort_threads"])
     return kwargs
 
 
 class GazePipeline:
     def __init__(self, camera_index: int = 0, target_fps: int = 30) -> None:
         self.webcam = Webcam(camera_index=camera_index, target_fps=target_fps)
-        self.estimator = FaceGazeEstimator()
+        self.estimator = FaceGazeEstimator(**_load_estimator_kwargs())
         mapping_config = (
             GazeMappingConfig.from_yaml(str(CONFIG_PATH))
             if CONFIG_PATH.exists()
@@ -61,7 +84,9 @@ class GazePipeline:
             fps = 1.0 / max(now - last_time, 1e-6)
             last_time = now
 
+            infer_start = time.monotonic()
             result = self.estimator.estimate(frame)
+            infer_ms = (time.monotonic() - infer_start) * 1000.0
             if result is None:
                 self.mapper.reset()
                 self.fixation.reset()
@@ -73,15 +98,21 @@ class GazePipeline:
                     "face_found": False,
                     "fixation": None,
                     "fps": fps,
+                    "infer_ms": infer_ms,
                     "frame": frame,
                 }
                 continue
 
             mapped = self.mapper.map(result.pitch, result.yaw, timestamp=now)
-            fixation_event = self.fixation.update(mapped.raw_x, mapped.raw_y, now)
+            fixation_event = (
+                self.fixation.update(mapped.raw_x, mapped.raw_y, now)
+                if mapped.on_screen
+                else self.fixation.update(None, None, now)
+            )
             yield {
                 "gaze_x": mapped.smoothed_x,
                 "gaze_y": mapped.smoothed_y,
+                "on_keyboard": mapped.on_screen,
                 "confidence": result.detection_confidence,
                 "selected_key": None,
                 "face_found": True,
@@ -90,7 +121,9 @@ class GazePipeline:
                 "bbox": result.bbox,
                 "fixation": fixation_event,
                 "fps": fps,
+                "infer_ms": infer_ms,
                 "frame": frame,
+                "face_result": result,
             }
 
     def close(self) -> None:

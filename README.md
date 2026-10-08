@@ -66,3 +66,13 @@ A scoped slice of **Phase 7 — Online Personalization** has also been pulled fo
 `experiments/calibrate_uncertainty.py`'s whole flow (show a target key, wait for a stable fixation, record it, repeat, then re-derive the mapping range and uncertainty scale) is now also available directly in the product, not just as a terminal script: the frontend's "Calibrate" button opens `CalibrationScreen`, which drives the exact same analysis functions (`compute_accuracy_dashboard`, `compute_sigma_scale`, `analyze_range`, imported, not re-derived) over a new `/ws/calibrate` WebSocket (`backend/calibration.py`), showing the target on the real virtual keyboard and the results dashboard in-app. Only one of `/ws/gaze` (typing) and `/ws/calibrate` can hold the webcam at a time; the frontend pauses the typing connection while calibrating and resumes it afterward.
 
 Next: the rest of **Phase 7 — Online Personalization**. See Section 19 of `MASTER_PROJECT_DOCUMENT.md` for the full roadmap.
+
+## Troubleshooting: "I type HELLO and something else comes out"
+
+Measured causes and what was done (see also `vision/README.md` and `decoder/README.md`):
+
+1. **The vision loop was ~3 fps with stale frames.** Fixed (threaded newest-frame capture, 320px detection every 4th frame, MobileOne-S0 gaze CNN). Check the FPS readout in the app footer after restarting the backend; if it's under ~10, close other CPU-heavy programs (a second copy of this backend holding an open browser tab is enough to halve it).
+2. **Calibration recorded the previous target's fixation** (no settle time, 2-frame "fixations"). Fixed: 0.9s settle delay, at least 5 samples per trial, 3 repeats. Any calibration data / `sigma_scale` / `half_fov_*` recorded before this fix is unreliable -- **re-run Calibrate** (the in-app button) after restarting.
+3. **Character-level beam search is too weak a prior at ~1 key of gaze error.** Replaced in the live app by the lexicon decoder with selectable alternatives.
+
+After any backend code change: stop the old server (Ctrl+C -- the old process keeps the camera and CPU), then restart it.

@@ -35,14 +35,13 @@ class FixationAggregator:
         self,
         min_window_ms: float = 200.0,
         max_window_ms: float = 800.0,
-        fixation_radius: float = 0.06,
+        fixation_radius: float = 0.18,
     ) -> None:
         """min/max_window_ms: see config/decoder_params.yaml `fixation`.
         fixation_radius: normalized-screen distance from the current buffer's
         running mean beyond which a new sample is treated as the start of a
-        new fixation rather than continued scatter within the same one --
-        roughly half a key's width by default.
-        """
+        new fixation rather than continued scatter within the same one.
+        Set to 0.18 to accommodate natural webcam gaze jitter."""
         self.min_window_ms = min_window_ms
         self.max_window_ms = max_window_ms
         self.fixation_radius = fixation_radius

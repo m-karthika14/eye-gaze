@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BACKEND_WS } from '../config'
+import { canvasSize } from '../components/Stage'
 import type { CalibrationMessage } from '../types'
 
 export type CalibrationStatus = 'idle' | 'connecting' | 'running' | 'done' | 'error'
@@ -23,7 +24,10 @@ export function useCalibrationSocket() {
     const ws = new WebSocket(`${BACKEND_WS}/ws/calibrate`)
     wsRef.current = ws
 
-    ws.onopen = () => setStatus('running')
+    ws.onopen = () => {
+      setStatus('running')
+      ws.send(JSON.stringify({ canvas: canvasSize() })) // stamped into the config so typing can tell if the window changed
+    }
     ws.onclose = () => {
       wsRef.current = null
       setStatus((prev) => (prev === 'done' || prev === 'error' ? prev : 'idle'))

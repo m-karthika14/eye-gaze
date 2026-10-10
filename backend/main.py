@@ -78,6 +78,26 @@ def _load_live_sigma_bounds() -> tuple[float, float]:
     return float(cfg.get("live_sigma_floor", 0.08)), float(cfg.get("live_sigma_ceiling", 0.12))
 
 
+def _calibrated_canvas() -> list[float] | None:
+    """Keyboard canvas size (px) the current calibration was recorded at, or None if unknown."""
+    from vision.pipeline import CONFIG_PATH
+
+    if not CONFIG_PATH.exists():
+        return None
+    value = (yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}).get("calibrated_canvas")
+    return [float(value[0]), float(value[1])] if isinstance(value, list) and len(value) == 2 else None
+
+
+def _calibration_stale(calibrated: list[float] | None, current: list[float] | None) -> bool | None:
+    """True when the keyboard canvas differs (>4%) from the one calibrated on, or was never stamped
+    (a calibration from before the full-screen keyboard). None until the UI reports its size."""
+    if current is None:
+        return None
+    if calibrated is None or calibrated[0] <= 0 or calibrated[1] <= 0:
+        return True
+    return abs(current[0] - calibrated[0]) / calibrated[0] > 0.04 or abs(current[1] - calibrated[1]) / calibrated[1] > 0.04
+
+
 latest_preview_jpeg: bytes | None = None
 
 
@@ -131,6 +151,8 @@ async def ws_gaze(websocket: WebSocket) -> None:
     sigma_floor, sigma_ceiling = _load_live_sigma_bounds()
     s4 = S4LiveDecoder(layout=_layout, char_lm=_char_lm, sigma_floor=sigma_floor, sigma_ceiling=sigma_ceiling)
     fps_ema = 0.0
+    calibrated_canvas = _calibrated_canvas()
+    current_canvas: list[float] | None = None
     loop = asyncio.get_event_loop()
     stream = pipeline.stream()
 
@@ -148,9 +170,12 @@ async def ws_gaze(websocket: WebSocket) -> None:
     pending_prefix = ""
 
     async def receive_control_messages() -> None:
+        nonlocal current_canvas
         try:
             while True:
                 msg = await websocket.receive_json()
+                if isinstance(msg.get("canvas"), list) and len(msg["canvas"]) == 2:
+                    current_canvas = [float(msg["canvas"][0]), float(msg["canvas"][1])]
                 if "adaptive_keyboard" in msg:
                     settings["adaptive_keyboard"] = bool(msg["adaptive_keyboard"])
                 if "decoder_mode" in msg:
@@ -266,7 +291,10 @@ async def ws_gaze(websocket: WebSocket) -> None:
             decoder_mode = settings.get("decoder_mode", "s4")
             now_ts = time.monotonic()
             s4.dwell_enabled = settings.get("select_mode", "blink") == "dwell"
-            eyes_closed = bool(sample.get("eyes_closed") or sample.get("mouth_open"))  # gaze is held while either gesture is in progress
+            select_mode_now = settings.get("select_mode", "blink")
+            pipeline.hold_on_blink = select_mode_now == "blink"  # freeze gaze only for the ACTIVE gesture mode
+            pipeline.hold_on_mouth = select_mode_now == "mouth"
+            eyes_closed = bool(sample.get("gaze_held"))
             pending_select = settings.pop("pending_select", False)
             # Gaze that has left the keyboard (e.g. reading the text box above it)
             # must not dwell on the clamped edge key -- treat it as no gaze.
@@ -384,6 +412,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "text": event.text,
                     "decoder_mode": decoder_mode,
                     "select_mode": settings.get("select_mode", "blink"),
+                    "calibration_stale": _calibration_stale(calibrated_canvas, current_canvas),
                     "blink_progress": round(float(sample.get("blink_progress") or 0.0), 2),
                     "mouth_progress": round(float(sample.get("mouth_progress") or 0.0), 2),
                     "ear": round(float(sample["ear"]), 2) if sample.get("ear") is not None else None,

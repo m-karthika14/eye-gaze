@@ -11,8 +11,8 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.1692   # comfortable laptop horizontal swing (~13 deg)
-half_fov_pitch_rad: 0.2211 # increased from 0.1217 to prevent premature saturation to bottom keys (~13 deg)
+half_fov_yaw_rad: 0.2028   # comfortable laptop horizontal swing (~13 deg)
+half_fov_pitch_rad: 0.1496 # increased from 0.1217 to prevent premature saturation to bottom keys (~13 deg)
 invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking
                           # left produced MORE POSITIVE yaw, looking right produced MORE NEGATIVE yaw --
                           # backwards from the documented convention, specific to this setup
@@ -43,8 +43,9 @@ drift_max_alpha: 0.2     # per-update cap, so one long pause/gap can't snap the 
 # real target instead of one it passed through on the way). If it still feels
 # laggy on fast glances, raise filter_beta; if the dot is jittery while
 # holding still, lower filter_min_cutoff.
-filter_min_cutoff: 1.0
-filter_beta: 3.0
+filter_min_cutoff: 0.5   # was 1.0: webcam gaze here arrives at ~10 fps with ~0.05 scatter, so rest-time smoothing needs to be heavier
+filter_beta: 1.5        # was 3.0
+stability_radius: 0.05  # cursor leash (see vision/gaze_to_screen.py); raise if it still wobbles, lower if it feels sticky
 filter_d_cutoff: 1.0
 
 # Vision speed (vision/face_gaze.py). The original setup (RetinaFace at 640x640 +
@@ -57,9 +58,10 @@ filter_d_cutoff: 1.0
 gaze_model: MOBILEONE_S0
 detect_every: 4
 detect_size: 320
-# ONNX Runtime thread cap. The ORT default measured 344 ms/frame for the gaze CNN on this
-# 8-logical-core hybrid CPU vs 14 ms with 4 threads. 0 = ORT default.
-ort_threads: 4
+# ONNX Runtime thread cap (spinning is also switched off in code). The ORT default measured
+# 344 ms/frame for the gaze CNN on this 8-logical-core hybrid CPU vs ~15 ms with 2-4 threads, and
+# ~290 ms of CPU per frame vs ~33 ms (saturating the machine). 0 = ORT default.
+ort_threads: 2
 # Blink-to-select (vision/blink.py): FaceMesh gives eye openness; holding the eyes shut for
 # blink_min_ms selects the key you were looking at. Natural blinks (<~300ms) are ignored.
 eye_mesh: true
@@ -68,10 +70,15 @@ blink_min_ms: 450
 # While these two are present they REPLACE half_fov_*/invert_x/invert_y above (the Invert buttons in the
 # app do nothing). Delete both keys to go back to the heuristic mapping.
 affine_x:
-- 0.4834
-- 1.9482
-- 0.3275
+- 0.4106
+- 2.3853
+- -0.0532
 affine_y:
-- 0.3374
-- 0.1049
-- -2.2159
+- -0.3038
+- 0.5831
+- -2.8095
+calibrated_canvas:
+- 1280
+- 537
+affine_absolute: true
+feature_model: models/eye_feature_model.npz

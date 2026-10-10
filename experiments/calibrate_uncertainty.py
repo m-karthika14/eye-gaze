@@ -49,9 +49,11 @@ SAMPLES_PATH = DATA_DIR / "uncertainty_calibration_samples.jsonl"
 
 CANVAS_SIZE = (720, 1280)  # h, w -- stand-in for "the screen", matches vision/run_demo.py
 
-# A spread across the keyboard: corners, edges, center -- not all 28 keys,
-# just enough variety to characterize the error across the whole surface.
-TARGET_KEYS = ["Q", "P", "Z", "M", "D", "H", "A", "L", "T", "B", "SPACE", "BACKSPACE"]
+# A spread across the keyboard, weighted towards the EDGES and corners: those are the
+# trials that pin down the gain of the gaze-to-screen mapping, and the keys on the far
+# left/right/top (Q W P O A L Z M ...) were the ones that "weren't reachable" when the
+# fit was dominated by central keys. 16 keys x 2 repeats = 32 trials.
+TARGET_KEYS = ["Q", "W", "P", "O", "A", "S", "L", "Z", "X", "M", "T", "D", "H", "B", "SPACE", "BACKSPACE"]
 
 # Each target is visited this many times (in randomized order, not back to
 # back) so the estimate isn't skewed by one or two rough trials -- a handful
@@ -60,7 +62,7 @@ TARGET_KEYS = ["Q", "P", "Z", "M", "D", "H", "A", "L", "T", "B", "SPACE", "BACKS
 # trials swinging 2-3x from their siblings (webcam appearance-based gaze
 # noise, not a bug), so the median/robust estimators below didn't have
 # enough samples per key to average that out. 3 x 12 keys = 36 trials, ~2.5 min.
-REPEATS = 3
+REPEATS = 2
 
 # A recorded trial must be a steady fixation of at least this long AND contain
 # at least MIN_FIXATION_SAMPLES gaze samples. The sample floor is what actually
@@ -123,7 +125,7 @@ def warm_up(pipeline: GazePipeline) -> bool:
 
 
 def run_trials(layout: KeyboardLayout) -> list[dict]:
-    pipeline = GazePipeline(camera_index=0, target_fps=30)
+    pipeline = GazePipeline(camera_index=0, target_fps=30, gestures=False)
     samples: list[dict] = []
 
     trial_order = TARGET_KEYS * REPEATS
@@ -181,6 +183,7 @@ def run_trials(layout: KeyboardLayout) -> list[dict]:
                             "rel_pitch": pipeline.mapper.last_rel_pitch,
                             "range_yaw": pipeline.mapper.range_yaw,
                             "range_pitch": pipeline.mapper.range_pitch,
+                            **face_fields(sample),
                         }
                     )
                     recorded = True
@@ -366,45 +369,203 @@ def analyze_range(samples: list[dict]) -> tuple[float, float] | None:
     return statistics.median(yaw_estimates), statistics.median(pitch_estimates)
 
 
+def face_fields(sample: dict) -> dict:
+    """Head-position fields to store with a calibration trial (see fit_affine)."""
+    out: dict = {}
+    f = sample.get("face_feat")
+    if f is not None:
+        out.update({"face_cx": f[0], "face_cy": f[1], "face_w": f[2]})
+    a = sample.get("raw_angle_mean")  # (pitch, yaw) averaged over the last 0.5s, absolute (no session zero point)
+    if a is not None:
+        out.update({"abs_pitch": a[0], "abs_yaw": a[1]})
+    e = sample.get("eye_feat_mean")  # EyeTrax-style eye/iris features averaged over the last 0.5s (vision/eye_features.py)
+    if e is not None:
+        out["eye_feat"] = [round(float(v), 5) for v in e]
+    return out
+
+
+def _inverse_fit(ang: np.ndarray, pos: np.ndarray, feats: np.ndarray | None, ridge: float = 1e-4, ridge_feat: float = 2.0):
+    """angle = b0 + B1 @ pos + G @ head  (regress angles on positions: noise is only in the dependent variable,
+    so no regression dilution), then invert for position. Returns (W, ref) with
+    pos = [1, yaw, pitch, head - ref] @ W, or None if the relation is near-singular."""
+    n = len(pos)
+    if feats is None:
+        ref, sd, fs = None, None, None
+        design = np.c_[np.ones(n), pos]
+    else:
+        ref = feats.mean(axis=0)
+        sd = np.maximum(feats.std(axis=0), 1e-3)
+        fs = (feats - ref) / sd
+        design = np.c_[np.ones(n), pos, fs]
+    reg = np.diag([ridge] * 3 + [ridge_feat] * (design.shape[1] - 3))
+    c = np.linalg.solve(design.T @ design + reg, design.T @ ang)  # (cols x 2): [yaw, pitch]
+    b0, b1 = c[0], c[1:3].T
+    if abs(np.linalg.det(b1)) < 1e-6 or np.linalg.cond(b1) > 50:
+        return None
+    inv = np.linalg.inv(b1)
+    rows = [-(inv @ b0), inv.T[0], inv.T[1]]
+    w = np.vstack([rows[0], rows[1], rows[2]])
+    if feats is not None:
+        g = c[3:].T  # (2 x k) in standardized units
+        w = np.vstack([w, (-(inv @ g)).T / sd[:, None]])
+    return w, ref
+
+
+def _forward_fit(ang: np.ndarray, pos: np.ndarray, ridge: float = 1e-4) -> tuple[np.ndarray, None]:
+    """Direct least squares, pos = [1, yaw, pitch] @ W. Lowest error on noisy data, but shrinks towards
+    the centre (regression dilution), so the extremes are under-reached."""
+    design = np.c_[np.ones(len(ang)), ang]
+    return np.linalg.solve(design.T @ design + ridge * np.eye(3), design.T @ pos), None
+
+
+MIN_HEAD_SPREAD = 0.008  # head position features must vary at least this much (fraction of frame) during calibration
+
+
 def fit_affine(samples: list[dict], ridge: float = 1e-4, min_trials: int = 12) -> dict | None:
-    """Least-squares fit of the true target position from the bias-corrected
-    gaze angles recorded at each trial:  x = c0 + c1*yaw + c2*pitch, y likewise.
+    """Learn the screen mapping from the calibration trials:
 
-    This learns the sign, scale, intercept and yaw/pitch cross-talk of THIS model
-    on THIS setup directly, instead of the hand-set invert flags and half_fov range
-    (which were wrong by a sign after the gaze CNN was swapped, and carried a
-    +0.17 vertical bias). Validated leave-one-out; returns None (caller keeps the
-    heuristic mapping) when there are too few trials or the fit isn't clearly
-    better than what the trials were recorded with.
+        x = c0 + c1*yaw + c2*pitch [+ c3*dcx + c4*dcy + c5*dw],   y likewise
 
-    Returns {"affine_x", "affine_y", "loo_rmse", "raw_rmse", "loo_mu": [(x, y)...]}.
+    yaw/pitch are the bias-corrected gaze angles recorded at each trial; dcx/dcy/dw (optional) are the
+    face's position and width in the camera frame relative to their calibration average.
+
+    Three candidate fits are compared leave-one-out and the most accurate (lowest RMSE) is kept:
+      - forward_angles:  position regressed directly on the angles (lowest error, but shrinks to the centre)
+      - inverse_angles:  angles regressed on position, then inverted (unbiased gain / reaches the edges, but
+                         amplifies noise -- on noisy data it can be much worse; measured 0.385 vs 0.256)
+      - inverse_head:    inverse_angles plus head position -- only considered if the head actually moved
+                         during calibration (>= MIN_HEAD_SPREAD in every feature); otherwise its
+                         coefficients are fit to noise and would swing the cursor on any later head shift.
+    An inverse fit is preferred when within 8% of the best RMSE, since it keeps the edges reachable.
+
+    Returns None (caller keeps the existing mapping) with too few trials, or a fit that is clearly worse than
+    the mapping the trials were recorded with.
+
+    Returns {"affine_x", "affine_y", "face_ref" (or None), "method", "uses_head", "loo_rmse", "loo_by_method",
+             "raw_rmse", "loo_mu": [(x, y)...]}.
     """
     usable = [s for s in samples if "rel_yaw" in s and "rel_pitch" in s]
     if len(usable) < min_trials:
         return None
-    feats = np.array([[1.0, s["rel_yaw"], s["rel_pitch"]] for s in usable])
+    # Prefer ABSOLUTE, 0.5s-averaged angles (no per-session zero point; far less per-frame noise in the inputs).
+    absolute = all("abs_yaw" in s and "abs_pitch" in s for s in usable)
+    angles = np.array([[s["abs_yaw"], s["abs_pitch"]] for s in usable]) if absolute else np.array([[s["rel_yaw"], s["rel_pitch"]] for s in usable])
     truth = np.array([[s["true_x"], s["true_y"]] for s in usable])
     raw = np.array([[s["mu_x"], s["mu_y"]] for s in usable])
+    have_head = all(k in s for s in usable for k in ("face_cx", "face_cy", "face_w"))
+    head = np.array([[s["face_cx"], s["face_cy"], s["face_w"]] for s in usable]) if have_head else None
+    head_moved = head is not None and bool((head.std(axis=0) >= MIN_HEAD_SPREAD).all())
 
-    def solve(f: np.ndarray, t: np.ndarray) -> np.ndarray:
-        return np.linalg.solve(f.T @ f + ridge * np.eye(3), f.T @ t)
+    def fit(method: str, idx: np.ndarray):
+        if method == "forward_angles":
+            return _forward_fit(angles[idx], truth[idx], ridge)
+        return _inverse_fit(angles[idx], truth[idx], head[idx] if method == "inverse_head" else None, ridge)
 
-    loo = np.zeros_like(truth)
-    for i in range(len(usable)):
-        keep = np.arange(len(usable)) != i
-        loo[i] = feats[i] @ solve(feats[keep], truth[keep])
-    loo_rmse = float(np.sqrt(((loo - truth) ** 2).sum(axis=1).mean()))
-    raw_rmse = float(np.sqrt(((raw - truth) ** 2).sum(axis=1).mean()))
-    if loo_rmse > 0.35 or loo_rmse > 0.9 * raw_rmse:
+    def predict(w: np.ndarray, ref: np.ndarray | None, i: int) -> np.ndarray:
+        x = np.r_[1.0, angles[i]]
+        if ref is not None:
+            x = np.r_[x, head[i] - ref]
+        return x @ w
+
+    methods = ["inverse_angles", "forward_angles"] + (["inverse_head"] if head_moved else [])
+    loo: dict[str, np.ndarray] = {}
+    for method in methods:
+        out = np.zeros_like(truth)
+        ok = True
+        for i in range(len(usable)):
+            f = fit(method, np.arange(len(usable)) != i)
+            if f is None:
+                ok = False
+                break
+            out[i] = predict(f[0], f[1], i)
+        if ok:
+            loo[method] = out
+    if not loo:
         return None
-    w = solve(feats, truth)
+
+    def rmse(pred: np.ndarray) -> float:
+        return float(np.sqrt(((pred - truth) ** 2).sum(axis=1).mean()))
+
+    scores = {m: rmse(p) for m, p in loo.items()}
+    best = min(scores, key=scores.get)
+    chosen = next((m for m in ("inverse_angles", "inverse_head") if m in scores and scores[m] <= 1.08 * scores[best]), best)
+    loo_rmse, raw_rmse = scores[chosen], float(np.sqrt(((raw - truth) ** 2).sum(axis=1).mean()))
+    if loo_rmse > 0.35 or loo_rmse > 1.2 * raw_rmse:
+        return None
+    f = fit(chosen, np.ones(len(usable), dtype=bool))
+    if f is None:
+        return None
+    w, ref = f
     return {
         "affine_x": [round(float(v), 4) for v in w[:, 0]],
         "affine_y": [round(float(v), 4) for v in w[:, 1]],
+        "face_ref": None if ref is None else [round(float(v), 5) for v in ref],
+        "method": chosen,
+        "absolute": absolute,
+        "uses_head": chosen == "inverse_head",
         "loo_rmse": loo_rmse,
+        "loo_by_method": {m: round(v, 4) for m, v in scores.items()},
         "raw_rmse": raw_rmse,
+        "loo_mu": [(float(a), float(b)) for a, b in loo[chosen]],
+    }
+
+
+FEATURE_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "eye_feature_model.npz"
+
+
+def fit_feature_mapping(samples: list[dict], min_trials: int = 12) -> dict | None:
+    """EyeTrax-style mapping: standardise the head-normalised eye/iris features recorded at each trial and ridge-regress the
+    target position on them (vision/feature_model.py). The ridge strength is chosen by leave-one-trial-out RMSE.
+
+    Returns {"model": FeatureModel, "alpha", "loo_rmse", "loo_mu", "alpha_scores"} or None when the trials don't all
+    carry features. `loo_mu` lines up with fit_affine's (same `usable` subset and order), so either can be handed to
+    with_corrected_mu().
+    """
+    from vision.eye_features import FEATURE_SUBSETS
+    from vision.feature_model import fit_ridge, select_alpha
+
+    usable = [s for s in samples if "rel_yaw" in s and "rel_pitch" in s]
+    if len(usable) < min_trials or not all("eye_feat" in s for s in usable):
+        return None
+    x = np.array([s["eye_feat"] for s in usable], dtype=np.float64)
+    if x.ndim != 2 or not np.isfinite(x).all():
+        return None
+    y = np.array([[s["true_x"], s["true_y"]] for s in usable], dtype=np.float64)
+    # Try each feature subset x ridge strength; keep the best by leave-one-trial-out RMSE.
+    best = None
+    by_subset: dict[str, float] = {}
+    for name, cols in FEATURE_SUBSETS.items():
+        if max(cols) >= x.shape[1]:
+            continue
+        alpha, loo, scores = select_alpha(x[:, cols], y)
+        rmse = float(np.sqrt(((loo - y) ** 2).sum(axis=1).mean()))
+        by_subset[name] = round(rmse, 4)
+        if best is None or rmse < best[0]:
+            best = (rmse, name, cols, alpha, loo)
+    if best is None:
+        return None
+    rmse, name, cols, alpha, loo = best
+    return {
+        "model": fit_ridge(x, y, alpha, columns=cols),
+        "alpha": alpha,
+        "subset": name,
+        "loo_rmse": rmse,
+        "loo_by_subset": by_subset,
         "loo_mu": [(float(a), float(b)) for a, b in loo],
     }
+
+
+def write_back_feature_model(path: str | None) -> None:
+    """Point config/gaze_mapping.yaml at the saved feature model, or remove the key (CNN mapping in use)."""
+    with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
+        data = yaml.load(f)
+    if path:
+        data["feature_model"] = path
+    elif "feature_model" in data:
+        del data["feature_model"]
+    with open(GAZE_MAPPING_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    print(f"[OK] feature_model -> {path}")
 
 
 def with_corrected_mu(samples: list[dict], fit: dict) -> list[dict]:
@@ -415,14 +576,30 @@ def with_corrected_mu(samples: list[dict], fit: dict) -> list[dict]:
     return [dict(s, mu_x=x, mu_y=y) for s, (x, y) in zip(usable, fit["loo_mu"])]
 
 
-def write_back_affine(affine_x: list[float], affine_y: list[float]) -> None:
+def write_back_affine(affine_x: list[float], affine_y: list[float], face_ref: list[float] | None = None, absolute: bool = False) -> None:
     with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
         data = yaml.load(f)
     data["affine_x"] = affine_x
     data["affine_y"] = affine_y
+    data["affine_absolute"] = bool(absolute)
+    if face_ref is not None:
+        data["face_ref"] = face_ref
+    elif "face_ref" in data:
+        del data["face_ref"]  # angles-only fit: stale head-position reference must not linger
     with open(GAZE_MAPPING_PATH, "w", encoding="utf-8") as f:
         yaml.dump(data, f)
     print(f"[OK] wrote affine_x={affine_x}, affine_y={affine_y} to {GAZE_MAPPING_PATH}")
+
+
+def write_back_canvas(width_px: float, height_px: float) -> None:
+    """Record the keyboard canvas size (pixels) the calibration was done at. The mapping is learned against
+    that exact on-screen rectangle; the typing UI compares it with the live canvas and warns if they differ."""
+    with open(GAZE_MAPPING_PATH, encoding="utf-8") as f:
+        data = yaml.load(f)
+    data["calibrated_canvas"] = [int(round(width_px)), int(round(height_px))]
+    with open(GAZE_MAPPING_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    print(f"[OK] wrote calibrated_canvas={data['calibrated_canvas']} to {GAZE_MAPPING_PATH}")
 
 
 def write_back(sigma_scale: float) -> None:

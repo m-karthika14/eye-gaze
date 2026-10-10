@@ -14,6 +14,7 @@ and key-probability-mapping concerns separately owned, per Section 15).
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -78,9 +79,19 @@ def _load_blink_min_ms() -> float:
 
 
 class GazePipeline:
-    def __init__(self, camera_index: int = 0, target_fps: int = 30) -> None:
+    def __init__(self, camera_index: int = 0, target_fps: int = 30, gestures: bool = True) -> None:
+        """gestures=False builds a pure gaze pipeline (no face mesh / blink / mouth detection) -- what
+        calibration uses, so nothing but the gaze model can influence the data it records."""
         self.webcam = Webcam(camera_index=camera_index, target_fps=target_fps)
-        self.estimator = FaceGazeEstimator(**_load_estimator_kwargs())
+        estimator_kwargs = _load_estimator_kwargs()
+        # (gestures=False no longer turns the mesh off: calibration needs its eye features. It only means no
+        # blink/mouth holds, which are off by default anyway.)
+        self.estimator = FaceGazeEstimator(**estimator_kwargs)
+        # The gaze point is frozen while a gesture is in progress ONLY for the gesture that is the active
+        # select mode (set by the backend). A false positive (looking down lowers the lids; a slightly open
+        # mouth) must never freeze the cursor in other modes or during calibration.
+        self.hold_on_blink = False
+        self.hold_on_mouth = False
         mapping_config = (
             GazeMappingConfig.from_yaml(str(CONFIG_PATH))
             if CONFIG_PATH.exists()
@@ -91,6 +102,8 @@ class GazePipeline:
         self.blink = BlinkDetector(min_ms=_load_blink_min_ms())
         self.mouth = MouthOpenDetector(min_ms=_load_blink_min_ms() * 0.9)
         self._last_mapped = None
+        self._angle_buf: deque[tuple[float, float, float]] = deque(maxlen=40)  # (t, pitch, yaw)
+        self._feat_buf: deque = deque(maxlen=40)  # (t, eye feature vector)
 
     def stream(self) -> Iterator[dict[str, Any]]:
         last_time = time.monotonic()
@@ -108,6 +121,8 @@ class GazePipeline:
                 self.blink.reset()
                 self.mouth.reset()
                 self._last_mapped = None
+                self._angle_buf.clear()
+                self._feat_buf.clear()
                 yield {
                     "gaze_x": None,
                     "gaze_y": None,
@@ -121,17 +136,32 @@ class GazePipeline:
                 }
                 continue
 
+            h, w = frame.shape[:2]
+            bx1, by1, bx2, by2 = result.bbox
+            face_feat = ((bx1 + bx2) / 2.0 / w, (by1 + by2) / 2.0 / h, (bx2 - bx1) / float(w))
             blink = self.blink.update(result.ear, now)
             mouth = self.mouth.update(result.mar, now)
-            hold_gaze = blink.eyes_closed or mouth.active  # gaze CNN output is unreliable while eyes are shut / jaw is open
+            hold_gaze = (self.hold_on_blink and blink.eyes_closed) or (self.hold_on_mouth and mouth.active)
+            self.estimator.track_through_closure = self.hold_on_blink
             if hold_gaze and self._last_mapped is not None:
                 # Eyes shut: the gaze CNN's output is garbage. Don't feed it to the
                 # mapper (its bias auto-centring would absorb it), the One Euro filter
                 # or the fixation window -- hold the last good point instead.
                 mapped = self._last_mapped
             else:
-                mapped = self.mapper.map(result.pitch, result.yaw, timestamp=now)
+                mapped = self.mapper.map(result.pitch, result.yaw, timestamp=now, face=face_feat, features=result.eye_feat)
                 self._last_mapped = mapped
+            # Mean of the raw (absolute) CNN angles over the last 0.5s of un-held frames: what calibration records
+            # for a trial instead of one noisy frame (per-frame scatter is ~0.05 and would otherwise be baked
+            # into every training input).
+            if not hold_gaze:
+                self._angle_buf.append((now, result.pitch, result.yaw))
+                if result.eye_feat is not None:
+                    self._feat_buf.append((now, result.eye_feat))
+            recent = [(p, y) for t, p, y in self._angle_buf if now - t <= 0.5]
+            angle_mean = (sum(p for p, _ in recent) / len(recent), sum(y for _, y in recent) / len(recent)) if len(recent) >= 3 else None
+            recent_feats = [f for t, f in self._feat_buf if now - t <= 0.5]
+            feat_mean = sum(recent_feats) / len(recent_feats) if len(recent_feats) >= 3 else None
             if hold_gaze:
                 fixation_event = None
             elif mapped.on_screen:
@@ -143,7 +173,11 @@ class GazePipeline:
                 "gaze_y": mapped.smoothed_y,
                 "on_keyboard": mapped.on_screen,
                 "ear": result.ear,
+                "raw_angle_mean": angle_mean,
+                "eye_feat_mean": feat_mean,
+                "face_feat": face_feat,
                 "eyes_closed": blink.eyes_closed,
+                "gaze_held": hold_gaze,
                 "mar": result.mar,
                 "mouth_open": mouth.active,
                 "mouth_progress": mouth.progress,

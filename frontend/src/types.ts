@@ -55,6 +55,7 @@ export interface GazeMessage {
   typing_paused?: boolean
   decoder_mode?: 's4' | 's0'
   select_mode?: 'dwell' | 'switch' | 'blink' | 'mouth'
+  calibration_stale?: boolean | null
   mouth_progress?: number
   ear?: number | null
   mar?: number | null
@@ -125,5 +126,6 @@ export type CalibrationMessage =
       dashboard: CalibrationDashboard
       sigma: CalibrationSigmaResult
       range: CalibrationRangeResult | null
+      mapping?: { method: 'features' | 'cnn' | 'none'; loo_rmse: { cnn: number | null; features: number | null }; alpha: number | null }
     }
   | { phase: 'error'; error: string }

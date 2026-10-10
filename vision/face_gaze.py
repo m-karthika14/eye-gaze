@@ -15,12 +15,13 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 import onnxruntime as ort
-from uniface.constants import GazeWeights
+from uniface.constants import FaceMeshWeights, GazeWeights
 from uniface.detection import RetinaFace
 from uniface.gaze import MobileGaze
 from uniface.landmark import FaceMesh
 
 from .blink import eye_aspect_ratio, mouth_aspect_ratio
+from .eye_features import features_from_pixel_landmarks
 
 # Below this EAR the eyes are shut (open is ~0.30). Used to keep tracking the face
 # through a closure: face detectors often lose a face whose eyes are closed.
@@ -37,6 +38,7 @@ class FaceGazeResult:
     landmarks: list[tuple[float, float]] | None = None
     ear: float | None = None  # eye aspect ratio (openness) from the face mesh; None if blink detection is off
     mar: float | None = None  # mouth aspect ratio (openness) from the face mesh
+    eye_feat: np.ndarray | None = None  # head-normalised eye/iris landmark features (vision/eye_features.py)
 
 
 def limit_onnx_threads(n: int) -> None:
@@ -44,9 +46,13 @@ def limit_onnx_threads(n: int) -> None:
     this call (uniface builds its sessions with default options, which we can't
     pass through). Measured on an 8-logical-core hybrid CPU: MobileOne-S0 gaze
     took 344 ms with the default thread count vs 14 ms with 4 threads -- the
-    default pool oversubscribes the cores and spin-waits. n <= 0 keeps ORT's default."""
+    default pool oversubscribes the cores and spin-waits. Spinning is the other
+    half of it: with 3 sessions (detector, gaze, mesh) the idle workers busy-wait
+    and burned ~290 ms of CPU per frame vs ~33 ms with spinning off (measured), saturating
+    the whole machine and dragging the app to ~7 fps. n <= 0 keeps ORT's default."""
     if n <= 0:
         return
+    cv2.setNumThreads(min(n, 2))  # OpenCV's own pool spins the same way during the mesh warp
     base = ort.SessionOptions
 
     class _Options(base):  # type: ignore[valid-type, misc]
@@ -55,6 +61,7 @@ def limit_onnx_threads(n: int) -> None:
             self.intra_op_num_threads = n
             self.inter_op_num_threads = 1
             self.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self.add_session_config_entry("session.intra_op.allow_spinning", "0")
 
     ort.SessionOptions = _Options
 
@@ -81,14 +88,16 @@ class FaceGazeEstimator:
         gaze_model: GazeWeights = GazeWeights.MOBILEONE_S0,
         detect_size: int = 320,
         detect_every: int = 4,
-        ort_threads: int = 4,
+        ort_threads: int = 2,
         eye_mesh: bool = True,
     ) -> None:
         limit_onnx_threads(ort_threads)
         self._detector = RetinaFace(input_size=(detect_size, detect_size))
         self._gaze = MobileGaze(model_name=gaze_model)
         # Face mesh (468 pts) only for eye openness -> blink-to-select (vision/blink.py).
-        self._mesh = FaceMesh() if eye_mesh else None
+        # The iris-capable V2 mesh (478 pts): EAR/MAR use the same first-468 layout as V1, and the iris points feed
+        # the EyeTrax-style eye features used for calibration/regression.
+        self._mesh = FaceMesh(model_name=FaceMeshWeights.V2_478) if eye_mesh else None
         self._detect_every = max(1, detect_every)
         self._frames_since_detect = 0
         self._bbox: np.ndarray | None = None  # smoothed float x1,y1,x2,y2
@@ -96,6 +105,10 @@ class FaceGazeEstimator:
         self._landmarks: list[tuple[float, float]] | None = None
         self._last_ear: float | None = None
         self._closed_frames = 0
+        # Only keep tracking through an apparent eye closure when blink-to-select is the active
+        # mode (set by the pipeline). Otherwise a falsely-low eye reading (e.g. looking down)
+        # would stop the face detector re-running and let the crop go stale.
+        self.track_through_closure = False
 
     def reset_tracking(self) -> None:
         self._bbox = None
@@ -117,20 +130,22 @@ class FaceGazeEstimator:
             self._landmarks = [(float(pt[0]), float(pt[1])) for pt in face.landmarks]
         return True
 
-    def _mesh_features(self, frame: np.ndarray) -> tuple[float | None, float | None]:
+    def _mesh_features(self, frame: np.ndarray) -> tuple[float | None, float | None, np.ndarray | None]:
         if self._mesh is None or self._bbox is None:
-            return None, None
+            return None, None, None
         try:
             kp = np.asarray(self._landmarks, dtype=np.float32) if self._landmarks else None
-            pts = self._mesh.get_landmarks(frame, self._bbox, kp)
-            return eye_aspect_ratio(pts), mouth_aspect_ratio(pts)
+            res = self._mesh.predict(frame, bboxes=[self._bbox], keypoints=None if kp is None else [kp])[0]
+            pts = res.landmarks  # (478, 3): pixel x/y, z on the same scale
+            feat = features_from_pixel_landmarks(pts, frame.shape[1], frame.shape[0])
+            return eye_aspect_ratio(pts[:, :2]), mouth_aspect_ratio(pts[:, :2]), feat
         except Exception:  # noqa: BLE001 -- a bad mesh frame must not kill gaze tracking
-            return None, None
+            return None, None, None
 
     def estimate(self, frame: np.ndarray) -> FaceGazeResult | None:
         # While the eyes are shut, don't re-run the detector (it often loses a face with
         # closed eyes) -- keep tracking the last box until they reopen.
-        eyes_shut = (
+        eyes_shut = self.track_through_closure and (
             self._last_ear is not None
             and self._last_ear < EAR_CLOSED_HINT
             and self._closed_frames < MAX_CLOSED_TRACK_FRAMES
@@ -142,8 +157,8 @@ class FaceGazeEstimator:
                 # Detector found nothing. Either the face left, or the eyes just closed.
                 # Probe the previous box with the mesh: if it reads as eyes-closed, keep going.
                 self._bbox = previous_bbox
-                ear, _ = self._mesh_features(frame)
-                if previous_bbox is None or ear is None or ear >= EAR_CLOSED_HINT:
+                ear, _, _ = self._mesh_features(frame)
+                if previous_bbox is None or not self.track_through_closure or ear is None or ear >= EAR_CLOSED_HINT:
                     self._bbox = None
                     self._last_ear = None
                     return None
@@ -158,7 +173,7 @@ class FaceGazeEstimator:
 
         gaze = self._gaze.estimate(frame[y1:y2, x1:x2])
 
-        ear, mar = self._mesh_features(frame)
+        ear, mar, eye_feat = self._mesh_features(frame)
         self._last_ear = ear
         self._closed_frames = self._closed_frames + 1 if (ear is not None and ear < EAR_CLOSED_HINT) else 0
 
@@ -170,6 +185,7 @@ class FaceGazeEstimator:
             landmarks=self._landmarks,
             ear=ear,
             mar=mar,
+            eye_feat=eye_feat,
         )
 
 

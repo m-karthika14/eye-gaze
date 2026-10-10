@@ -53,6 +53,7 @@ giving both.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields
 
 from .one_euro_filter import OneEuroFilter
@@ -89,9 +90,29 @@ class GazeMappingConfig:
     #   x = c0 + c1*rel_yaw + c2*rel_pitch ; y likewise, [c0, c1, c2] each.
     # When both are set they REPLACE the heuristic range/invert mapping below (the fit already
     # contains the sign, scale, intercept and yaw/pitch cross-talk for this model + setup).
-    offscreen_margin: float = 0.06  # how far past the keyboard edge (normalized) gaze may stray and still count as on a key
+    offscreen_margin: float = 0.08  # how far past the left/right/bottom keyboard edge (normalized) gaze may stray and still count as on a key
+    offscreen_margin_top: float = 0.12  # larger on top: the top row needs looking up, where the estimate is noisiest, and the text box above is ~0.2 away
+    # Cursor leash: the displayed/selecting point only moves once the filtered gaze strays more
+    # than this far from it, then trails at this distance. Hides the ~0.05 per-frame scatter of
+    # webcam gaze while you look at one key; 0 disables.
+    stability_radius: float = 0.04
+    # affine_x / affine_y are either 3 coefficients [c0, c_yaw, c_pitch] or 6 with head position:
+    #   [c0, c_yaw, c_pitch, c_cx, c_cy, c_w]  applied to  (face_feat - face_ref)
+    # where face_feat = (face centre x, face centre y, face width), each as a fraction of the frame. The gaze CNN
+    # reports a direction in CAMERA coordinates, so where it lands on the screen depends on where the head is.
     affine_x: list[float] | None = None
     affine_y: list[float] | None = None
+    face_ref: list[float] | None = None
+    # True: affine_* were fit on ABSOLUTE gaze angles (yaw/pitch straight from the CNN), so there is no per-session
+    # zero point at all. The older bias-relative mode measured angles against wherever the user happened to be
+    # looking during the first second of each session -- calibrate while looking at one thing, start typing while
+    # looking at the "Done" button, and the whole mapping is offset. Press C (recenter) to nudge it.
+    affine_absolute: bool = False
+    # Path (relative to the repo root) of a vision/feature_model.py .npz: EyeTrax-style ridge regression from
+    # head-normalised eye/iris landmark features to screen position. When present (and features are supplied) it
+    # replaces the gaze-CNN affine mapping entirely; written by Calibrate only when it beats the CNN mapping on
+    # held-out trials.
+    feature_model: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -126,6 +147,26 @@ class GazeToScreenMapper:
         self._last_drift_ts: float | None = None
         self._filter_x = self._make_filter()
         self._filter_y = self._make_filter()
+        self._stable: tuple[float, float] | None = None
+        self._shift = (0.0, 0.0)  # absolute mode: output offset set by recenter()
+        self._feature_model = self._load_feature_model()
+        self._last_unshifted: tuple[float, float] | None = None
+
+    def _load_feature_model(self):
+        path = self.config.feature_model
+        if not path:
+            return None
+        from pathlib import Path
+
+        from .feature_model import FeatureModel
+
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parent.parent / p
+        try:
+            return FeatureModel.load(p) if p.exists() else None
+        except Exception:  # noqa: BLE001 -- a corrupt model file must not take the app down; fall back to the CNN mapping
+            return None
 
     def _make_filter(self) -> OneEuroFilter:
         cfg = self.config
@@ -163,9 +204,19 @@ class GazeToScreenMapper:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
         self._filter_x.reset()
         self._filter_y.reset()
+        self._stable = None
 
     def recenter(self, pitch: float | None = None, yaw: float | None = None) -> None:
         """Immediately locks bias to the current gaze angle so (0.5, 0.5) centers on screen."""
+        cfg = self.config
+        if (cfg.affine_absolute and cfg.affine_x and cfg.affine_y) or self._feature_model is not None:
+            # Absolute mode: shift the output so wherever the user is looking right now maps to the centre.
+            if self._last_unshifted is not None:
+                self._shift = (0.5 - self._last_unshifted[0], 0.5 - self._last_unshifted[1])
+            self._filter_x.reset()
+            self._filter_y.reset()
+            self._stable = None
+            return
         p = pitch if pitch is not None else getattr(self, "_last_raw_pitch", None)
         y = yaw if yaw is not None else getattr(self, "_last_raw_yaw", None)
         if p is not None and y is not None:
@@ -177,6 +228,7 @@ class GazeToScreenMapper:
             self._last_drift_ts = None
             self._filter_x.reset()
             self._filter_y.reset()
+            self._stable = None
         else:
             self._bias_pitch = 0.0
             self._bias_yaw = 0.0
@@ -186,12 +238,27 @@ class GazeToScreenMapper:
             self._range_pitch = self.config.half_fov_pitch_rad
             self._last_drift_ts = None
 
-    def map(self, pitch: float, yaw: float, timestamp: float) -> MappedGaze:
+    def map(
+        self,
+        pitch: float,
+        yaw: float,
+        timestamp: float,
+        face: tuple[float, float, float] | None = None,
+        features=None,
+    ) -> MappedGaze:
         cfg = self.config
         self._last_raw_pitch = pitch
         self._last_raw_yaw = yaw
 
+        use_features = self._feature_model is not None and features is not None and len(features) == self._feature_model.n_features
+        absolute = bool((cfg.affine_absolute and cfg.affine_x and cfg.affine_y) or use_features)
+        if absolute:  # no startup auto-centre, no drift chase: angles are used as-is
+            self._bias_pitch = 0.0
+            self._bias_yaw = 0.0
+            self._bias_locked = True
         on_screen = True
+        mapped_now = False  # True once this frame went through the real (bias-corrected) mapping
+        unclamped_x = unclamped_y = 0.5
         if not self._bias_locked:
             self._bias_samples.append((pitch, yaw))
             if len(self._bias_samples) >= cfg.startup_bias_frames:
@@ -203,7 +270,7 @@ class GazeToScreenMapper:
             # than showing wild swings computed against a not-yet-valid zero.
             raw_x, raw_y = 0.5, 0.5
         else:
-            if cfg.drift_correction_enabled and cfg.drift_tau_s > 0:
+            if cfg.drift_correction_enabled and cfg.drift_tau_s > 0 and not absolute:
                 dt = max(timestamp - self._last_drift_ts, 0.0) if self._last_drift_ts is not None else 0.0
                 alpha = min(dt / cfg.drift_tau_s, cfg.drift_max_alpha)
                 self._bias_pitch += alpha * (pitch - self._bias_pitch)
@@ -220,10 +287,24 @@ class GazeToScreenMapper:
             self._range_yaw = min(max(self._range_yaw, abs(rel_yaw)), cfg.max_range_rad)
             self._range_pitch = min(max(self._range_pitch, abs(rel_pitch)), cfg.max_range_rad)
 
-            if cfg.affine_x and cfg.affine_y and len(cfg.affine_x) == 3 and len(cfg.affine_y) == 3:
+            if use_features:
+                raw_x, raw_y = (float(v) for v in self._feature_model.predict(features))
+                self._last_unshifted = (raw_x, raw_y)
+                raw_x += self._shift[0]
+                raw_y += self._shift[1]
+            elif cfg.affine_x and cfg.affine_y and len(cfg.affine_x) in (3, 6) and len(cfg.affine_y) == len(cfg.affine_x):
                 ax, ay = cfg.affine_x, cfg.affine_y
                 raw_x = ax[0] + ax[1] * rel_yaw + ax[2] * rel_pitch
                 raw_y = ay[0] + ay[1] * rel_yaw + ay[2] * rel_pitch
+                if face is not None and cfg.face_ref and len(cfg.face_ref) == 3:
+                    # Clamped: the fit only saw a small range of head positions; never extrapolate wildly.
+                    head = [min(max(face[i] - cfg.face_ref[i], -0.08), 0.08) for i in range(3)]
+                    raw_x += sum(c * h for c, h in zip(ax[3:], head))
+                    raw_y += sum(c * h for c, h in zip(ay[3:], head))
+                if absolute:
+                    self._last_unshifted = (raw_x, raw_y)
+                    raw_x += self._shift[0]
+                    raw_y += self._shift[1]
             else:
                 raw_x = 0.5 + 0.5 * (rel_yaw / self._range_yaw)
                 raw_y = 0.5 - 0.5 * (rel_pitch / self._range_pitch)
@@ -231,11 +312,39 @@ class GazeToScreenMapper:
                     raw_x = 1.0 - raw_x
                 if cfg.invert_y:
                     raw_y = 1.0 - raw_y
-            m = cfg.offscreen_margin
-            on_screen = -m <= raw_x <= 1.0 + m and -m <= raw_y <= 1.0 + m
+            mapped_now = True
+            unclamped_x, unclamped_y = raw_x, raw_y
             raw_x = min(max(raw_x, 0.0), 1.0)
             raw_y = min(max(raw_y, 0.0), 1.0)
 
-        smoothed_x = self._filter_x.filter(timestamp, raw_x)
-        smoothed_y = self._filter_y.filter(timestamp, raw_y)
+        if mapped_now:
+            # Filter the UNCLAMPED point and judge on/off-keyboard from the filtered value:
+            # a single noisy frame past the edge (common on the top row, where the estimate is
+            # noisiest) must not drop the highlight; sustained gaze beyond the margin must.
+            fx = self._filter_x.filter(timestamp, unclamped_x)
+            fy = self._filter_y.filter(timestamp, unclamped_y)
+            on_screen = (
+                -cfg.offscreen_margin <= fx <= 1.0 + cfg.offscreen_margin
+                and -cfg.offscreen_margin_top <= fy <= 1.0 + cfg.offscreen_margin
+            )
+            filtered_x, filtered_y = min(max(fx, 0.0), 1.0), min(max(fy, 0.0), 1.0)
+        else:
+            filtered_x = self._filter_x.filter(timestamp, raw_x)
+            filtered_y = self._filter_y.filter(timestamp, raw_y)
+
+        smoothed_x, smoothed_y = self._leash(filtered_x, filtered_y)
         return MappedGaze(raw_x=raw_x, raw_y=raw_y, smoothed_x=smoothed_x, smoothed_y=smoothed_y, on_screen=on_screen)
+
+    def _leash(self, x: float, y: float) -> tuple[float, float]:
+        r = self.config.stability_radius
+        if r <= 0 or self._stable is None:
+            self._stable = (x, y)
+            return x, y
+        sx, sy = self._stable
+        d = math.hypot(x - sx, y - sy)
+        if d > r:
+            k = (d - r) / d  # follow, but stay r behind the filtered point
+            sx += (x - sx) * k
+            sy += (y - sy) * k
+            self._stable = (sx, sy)
+        return self._stable

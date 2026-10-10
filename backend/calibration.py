@@ -40,11 +40,16 @@ from experiments.calibrate_uncertainty import (
     TARGET_KEYS,
     analyze_range,
     compute_accuracy_dashboard,
+    FEATURE_MODEL_PATH,
     compute_sigma_scale,
+    face_fields,
     fit_affine,
+    fit_feature_mapping,
     with_corrected_mu,
     write_back,
     write_back_affine,
+    write_back_canvas,
+    write_back_feature_model,
     write_back_range,
 )
 from vision.pipeline import GazePipeline
@@ -57,7 +62,7 @@ async def run_calibration_session(websocket: WebSocket) -> None:
     loop = asyncio.get_event_loop()
 
     try:
-        pipeline = GazePipeline(camera_index=0, target_fps=30)
+        pipeline = GazePipeline(camera_index=0, target_fps=30, gestures=False)
     except RuntimeError as exc:
         # Most likely the webcam is already held by /ws/gaze (the typing
         # socket) -- only one of the two can be open at a time.
@@ -66,14 +71,17 @@ async def run_calibration_session(websocket: WebSocket) -> None:
         return
 
     stop_requested = False
+    canvas: list[float] | None = None  # keyboard canvas size in px, sent by the UI when the session opens
 
     async def receive_control_messages() -> None:
-        nonlocal stop_requested
+        nonlocal stop_requested, canvas
         try:
             while True:
                 msg = await websocket.receive_json()
                 if msg.get("stop"):
                     stop_requested = True
+                if isinstance(msg.get("canvas"), list) and len(msg["canvas"]) == 2:
+                    canvas = [float(msg["canvas"][0]), float(msg["canvas"][1])]
         except Exception:  # noqa: BLE001 -- connection closing; main loop exits too
             pass
 
@@ -164,6 +172,7 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                             "rel_pitch": pipeline.mapper.last_rel_pitch,
                             "range_yaw": pipeline.mapper.range_yaw,
                             "range_pitch": pipeline.mapper.range_pitch,
+                            **face_fields(sample),
                         }
                     )
                     recorded = True
@@ -187,6 +196,7 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                                 "rel_pitch": pipeline.mapper.last_rel_pitch,
                                 "range_yaw": pipeline.mapper.range_yaw,
                                 "range_pitch": pipeline.mapper.range_pitch,
+                                **face_fields(sample),
                             }
                         )
                         recorded = True
@@ -212,10 +222,30 @@ async def run_calibration_session(websocket: WebSocket) -> None:
         # Learned mapping first: if it validates (leave-one-out), the dashboard and
         # sigma describe IT, not the heuristic mapping the trials were recorded with.
         affine = fit_affine(samples)
+        feature_fit = fit_feature_mapping(samples)
+        # Two candidate mappings, compared on the SAME held-out trials: the gaze-CNN angle fit, and the EyeTrax-style
+        # eye/iris-landmark ridge regression. Keep the feature model only if it is clearly more accurate.
+        use_features = feature_fit is not None and (affine is None or feature_fit["loo_rmse"] < 0.92 * affine["loo_rmse"])
+        mapping_payload = {
+            "method": "features" if use_features else ("cnn" if affine is not None else "none"),
+            "loo_rmse": {
+                "cnn": None if affine is None else round(affine["loo_rmse"], 4),
+                "features": None if feature_fit is None else round(feature_fit["loo_rmse"], 4),
+            },
+            "alpha": None if feature_fit is None else feature_fit["alpha"],
+            "subset": None if feature_fit is None else feature_fit["subset"],
+        }
         eval_samples = samples
-        if affine is not None:
-            write_back_affine(affine["affine_x"], affine["affine_y"])
-            eval_samples = with_corrected_mu(samples, affine)
+        if affine is not None:  # always kept as the fallback if the feature model is ever unavailable
+            write_back_affine(affine["affine_x"], affine["affine_y"], affine["face_ref"], affine["absolute"])
+        if use_features:
+            feature_fit["model"].save(FEATURE_MODEL_PATH)
+            write_back_feature_model("models/eye_feature_model.npz")
+            eval_samples = with_corrected_mu(samples, feature_fit)
+        else:
+            write_back_feature_model(None)
+            if affine is not None:
+                eval_samples = with_corrected_mu(samples, affine)
 
         dashboard = compute_accuracy_dashboard(eval_samples, layout)
 
@@ -238,6 +268,8 @@ async def run_calibration_session(websocket: WebSocket) -> None:
         min_sigma = float(decoder_params.get("gaze_uncertainty", {}).get("min_sigma", 0.01))
         sigma_result = compute_sigma_scale(eval_samples, min_sigma)
         write_back(sigma_result["sigma_scale"])
+        if canvas is not None:
+            write_back_canvas(*canvas)
 
         await websocket.send_json(
             {
@@ -246,6 +278,7 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                 "dashboard": dashboard,
                 "sigma": sigma_result,
                 "range": range_payload,
+                "mapping": mapping_payload,
             }
         )
 

@@ -3,6 +3,7 @@ import { CalibrationScreen } from './components/CalibrationScreen'
 import { EyeTrackerFeed } from './components/EyeTrackerFeed'
 import { CandidateStrip } from './components/CandidateStrip'
 import { GazeCursor } from './components/GazeCursor'
+import { Stage, canvasSize } from './components/Stage'
 import { SuggestionStrip } from './components/SuggestionStrip'
 import { TextDisplay } from './components/TextDisplay'
 import { VirtualKeyboard } from './components/VirtualKeyboard'
@@ -16,21 +17,27 @@ function App() {
 
   // Merge keys (adaptive layout) is disabled per user request
   const adaptiveEnabled = false
-  const [invertX, setInvertX] = useState<boolean>(true)
-  const [invertY, setInvertY] = useState<boolean>(false)
   const [typingPaused, setTypingPaused] = useState<boolean>(false)
-  const [showTrackerFeed, setShowTrackerFeed] = useState<boolean>(true)
+  const [showTrackerFeed, setShowTrackerFeed] = useState<boolean>(false)
   const [decoderMode, setDecoderMode] = useState<'s4' | 's0'>('s4')
   const [selectMode, setSelectMode] = useState<'dwell' | 'switch' | 'blink' | 'mouth'>('blink')
 
   // Sync state from backend if received
   useEffect(() => {
-    if (message?.invert_x !== undefined) setInvertX(message.invert_x)
-    if (message?.invert_y !== undefined) setInvertY(message.invert_y)
     if (message?.typing_paused !== undefined) setTypingPaused(message.typing_paused)
     if (message?.decoder_mode !== undefined) setDecoderMode(message.decoder_mode)
     if (message?.select_mode !== undefined) setSelectMode(message.select_mode)
-  }, [message?.invert_x, message?.invert_y, message?.typing_paused, message?.decoder_mode, message?.select_mode])
+  }, [message?.typing_paused, message?.decoder_mode, message?.select_mode])
+
+  // Tell the backend how big the keyboard canvas is (on connect and on every resize), so it can warn when the
+  // calibration was recorded at a different size.
+  useEffect(() => {
+    if (status !== 'open') return
+    const send = () => sendMessage({ canvas: canvasSize() })
+    send()
+    window.addEventListener('resize', send)
+    return () => window.removeEventListener('resize', send)
+  }, [status, sendMessage])
 
   // Recenter helper
   function handleRecenter() {
@@ -54,16 +61,9 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [sendMessage])
 
-  function toggleInvertX() {
-    const next = !invertX
-    setInvertX(next)
-    sendMessage({ invert_x: next })
-  }
-
-  function toggleInvertY() {
-    const next = !invertY
-    setInvertY(next)
-    sendMessage({ invert_y: next })
+  function toggleFullscreen() {
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else void document.documentElement.requestFullscreen()
   }
 
   function togglePauseTyping() {
@@ -98,128 +98,155 @@ function App() {
   const keyLayoutOverride = adaptiveEnabled ? (message?.key_layout ?? null) : null
   const spaceLabel = suggestions.length > 0 ? `SPACE (${suggestions[0]})` : null
 
+  if (mode === 'calibrating') {
+    return layout ? <CalibrationScreen layout={layout} onClose={() => setMode('typing')} /> : null
+  }
+
+  const btn = 'whitespace-nowrap rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors'
+
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-slate-950 p-2.5 text-slate-100 select-none gap-2">
-      {/* Top Header */}
-      <header className="flex w-full items-center justify-between border-b border-slate-800/80 pb-2 px-2">
-        <div className="flex items-center gap-3">
-          <h1 className="text-base font-bold tracking-tight text-slate-100 flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-cyan-400 animate-pulse" />
-            Eye Gaze Keyboard
-          </h1>
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-              status === 'open' ? 'bg-emerald-900/80 text-emerald-300 border border-emerald-700' : 'bg-amber-900/80 text-amber-300 border border-amber-700'
-            }`}
-          >
-            {status === 'open' ? 'Live' : 'Connecting'}
-          </span>
-          {message?.face_found && (
-            <span className="rounded-full bg-cyan-950 px-2 py-0.5 text-[10px] text-cyan-300 border border-cyan-800">
-              Face Detected
-            </span>
-          )}
-        </div>
+    <Stage
+      top={
+        <>
+          {/* Row 1: title, status, controls */}
+          <header className="flex w-full items-center justify-between gap-3 overflow-x-auto">
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-cyan-400 animate-pulse" />
+              <h1 className="whitespace-nowrap text-sm font-bold tracking-tight">Eye Gaze Keyboard</h1>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                  status === 'open'
+                    ? 'border border-emerald-700 bg-emerald-900/80 text-emerald-300'
+                    : 'border border-amber-700 bg-amber-900/80 text-amber-300'
+                }`}
+              >
+                {status === 'open' ? 'Live' : 'Connecting'}
+              </span>
+              {message?.face_found && (
+                <span className="rounded-full border border-cyan-800 bg-cyan-950 px-2 py-0.5 text-[10px] text-cyan-300">Face</span>
+              )}
+            </div>
 
-        {mode === 'typing' && (
-          <div className="flex items-center gap-2">
-            {/* Decoder Toggle: S4 (Language Model) vs S0 (Raw Nearest Key) */}
-            <button
-              onClick={toggleDecoderMode}
-              title="Toggle between S4 (character language model beam search) and S0 (raw nearest key dwell)"
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold border transition-all ${
-                decoderMode === 's4'
-                  ? 'bg-emerald-800/90 border-emerald-500 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.3)] hover:bg-emerald-700'
-                  : 'bg-amber-900/85 border-amber-600 text-amber-100 hover:bg-amber-800'
-              }`}
-            >
-              {decoderMode === 's4' ? '🧠 Decoder: S4 (LM Beam)' : '🔤 Decoder: S0 (Raw Key)'}
-            </button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                onClick={toggleDecoderMode}
+                title="Toggle between S4 (language-model word decoder) and S0 (raw nearest key)"
+                className={`${btn} ${
+                  decoderMode === 's4'
+                    ? 'border-emerald-500 bg-emerald-800/90 text-emerald-100 hover:bg-emerald-700'
+                    : 'border-amber-600 bg-amber-900/85 text-amber-100 hover:bg-amber-800'
+                }`}
+              >
+                {decoderMode === 's4' ? '🧠 S4 decoder' : '🔤 S0 raw key'}
+              </button>
 
-            {/* Selection method: confirm with a key press vs. dwell */}
-            <button
-              onClick={toggleSelectMode}
-              title="Blink: look at a key, then hold your eyes shut ~0.5s. Space/Enter: look at a key, then press Space or Enter. Dwell: hold your gaze ~0.8s. (Space/Enter always works too.)"
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold border transition-all ${
-                selectMode !== 'dwell'
-                  ? 'bg-fuchsia-900/80 border-fuchsia-500 text-fuchsia-100 hover:bg-fuchsia-800'
-                  : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700'
-              }`}
-            >
-              {{ blink: '👁️ Select: Blink', mouth: '👄 Select: Mouth open', switch: '⌨️ Select: Space/Enter', dwell: '⏱️ Select: Dwell' }[selectMode]}
-            </button>
+              <button
+                onClick={toggleSelectMode}
+                title="Blink: look at a key, then hold your eyes shut ~0.5s. Mouth: open your mouth wide ~0.4s. Space/Enter: press Space or Enter. Dwell: hold your gaze ~0.8s. (Space/Enter always works too.)"
+                className={`${btn} ${
+                  selectMode !== 'dwell'
+                    ? 'border-fuchsia-500 bg-fuchsia-900/80 text-fuchsia-100 hover:bg-fuchsia-800'
+                    : 'border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                }`}
+              >
+                {{ blink: '👁️ Blink', mouth: '👄 Mouth', switch: '⌨️ Space/Enter', dwell: '⏱️ Dwell' }[selectMode]}
+              </button>
 
-            {/* Recenter Gaze */}
-            <button
-              onClick={handleRecenter}
-              title="Look at the center of the keyboard and click this button (or press 'C') to re-zero gaze"
-              className="flex items-center gap-1.5 rounded-md bg-cyan-700/90 hover:bg-cyan-600 px-3 py-1 text-xs font-semibold text-white shadow transition-all active:scale-95"
-            >
-              <span>🎯 Recenter Gaze</span>
-              <kbd className="rounded bg-cyan-900 px-1 py-0.5 text-[10px] text-cyan-200">C</kbd>
-            </button>
+              <button
+                onClick={handleRecenter}
+                title="Look at the centre of the screen and click (or press C) to re-zero gaze"
+                className={`${btn} border-cyan-700 bg-cyan-700/90 text-white hover:bg-cyan-600`}
+              >
+                🎯 Recenter <kbd className="ml-1 rounded bg-cyan-900 px-1 text-[10px] text-cyan-200">C</kbd>
+              </button>
 
-            {/* Pause / Resume Typing (for testing tracking safely) */}
-            <button
-              onClick={togglePauseTyping}
-              title="Pause key selection so you can inspect eyeball tracking without typing random letters"
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold border transition-colors ${
-                typingPaused
-                  ? 'bg-amber-700 text-white border-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)]'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {typingPaused ? '⏸️ Typing Paused' : '▶️ Typing Active'}
-            </button>
+              <button
+                onClick={togglePauseTyping}
+                title="Pause key selection so you can inspect tracking without typing"
+                className={`${btn} ${
+                  typingPaused
+                    ? 'border-amber-500 bg-amber-700 text-white'
+                    : 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {typingPaused ? '⏸️ Paused' : '▶️ Active'}
+              </button>
 
-            {/* Invert X */}
-            <button
-              onClick={toggleInvertX}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
-                invertX
-                  ? 'bg-indigo-900/80 border-indigo-700 text-indigo-200 hover:bg-indigo-800'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              Invert X: {invertX ? 'ON' : 'OFF'}
-            </button>
+              <button
+                onClick={() => setShowTrackerFeed(!showTrackerFeed)}
+                className={`${btn} ${
+                  showTrackerFeed ? 'border-sky-600 bg-sky-900/80 text-sky-200' : 'border-slate-700 bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}
+              >
+                📷 Camera
+              </button>
 
-            {/* Invert Y */}
-            <button
-              onClick={toggleInvertY}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
-                invertY
-                  ? 'bg-indigo-900/80 border-indigo-700 text-indigo-200 hover:bg-indigo-800'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              Invert Y: {invertY ? 'ON' : 'OFF'}
-            </button>
+              <button
+                onClick={toggleFullscreen}
+                title="Browser full screen (F11): the keyboard then covers the whole display. Re-run Calibrate after changing window size."
+                className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}
+              >
+                ⛶ Full screen
+              </button>
 
-            {/* Camera Screen Toggle */}
-            <button
-              onClick={() => setShowTrackerFeed(!showTrackerFeed)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
-                showTrackerFeed
-                  ? 'bg-sky-900/80 border-sky-600 text-sky-200'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              📷 Camera Screen
-            </button>
+              <button onClick={() => setMode('calibrating')} className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}>
+                Calibrate
+              </button>
+            </div>
+          </header>
 
-            {/* Calibrate */}
-            <button
-              onClick={() => setMode('calibrating')}
-              className="rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200 transition-colors"
-            >
-              Calibrate
-            </button>
+          {/* Row 2: typed text */}
+          <TextDisplay text={message?.text ?? ''} activeWord={message?.active_word} decoderMode={decoderMode} onClear={handleClearText} />
+
+          {/* Row 3: alternatives (left) and live readouts (right) */}
+          <div className="flex min-h-6 w-full items-center justify-between gap-3 overflow-hidden text-[11px] text-slate-400">
+            <div className="flex min-w-0 items-center gap-3">
+              {suggestions.length > 0 && <SuggestionStrip suggestions={suggestions} />}
+              {decoderMode === 's4' && <CandidateStrip candidates={message?.candidates ?? []} onPick={handlePickCandidate} />}
+              {socketError && <span className="text-red-400">{socketError}</span>}
+              {layoutError && <span className="text-red-400">{layoutError}</span>}
+              {typingPaused && <span className="animate-pulse font-semibold text-amber-400">⏸️ Typing paused</span>}
+              {message?.calibration_stale && (
+                <button
+                  onClick={() => setMode('calibrating')}
+                  className="animate-pulse whitespace-nowrap rounded border border-amber-500 bg-amber-900/70 px-2 py-0.5 font-semibold text-amber-200 hover:bg-amber-800"
+                >
+                  ⚠ Not calibrated for this window size — what you look at won&apos;t match the keys. Click to calibrate
+                </button>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
+              {message?.hovered_key && (
+                <span className="font-semibold text-cyan-400">
+                  [{message.hovered_key}] {Math.round((message.dwell_progress || 0) * 100)}%
+                </span>
+              )}
+              {(message?.mouth_progress ?? 0) > 0 && selectMode === 'mouth' && (
+                <span className="font-semibold text-fuchsia-300">👄 hold… {Math.round((message?.mouth_progress ?? 0) * 100)}%</span>
+              )}
+              {(message?.blink_progress ?? 0) > 0 && selectMode === 'blink' && (
+                <span className="font-semibold text-fuchsia-300">👁️ hold… {Math.round((message?.blink_progress ?? 0) * 100)}%</span>
+              )}
+              <span className="text-slate-500">
+                eye {message?.ear?.toFixed(2) ?? '–'} · mouth {message?.mar?.toFixed(2) ?? '–'}
+              </span>
+              <span className={(message?.fps ?? 0) < 10 ? 'text-amber-400' : ''}>
+                {message?.fps ? `${message.fps.toFixed(0)} fps (${message.infer_ms ?? 0} ms)` : ''}
+              </span>
+              <span className="text-slate-500">
+                {selectMode === 'blink'
+                  ? 'hold eyes shut ~0.5s to select'
+                  : selectMode === 'mouth'
+                    ? 'open mouth wide ~0.4s to select'
+                    : selectMode === 'switch'
+                      ? 'press Space/Enter to select'
+                      : 'hold gaze to select'}
+              </span>
+            </div>
           </div>
-        )}
-      </header>
-
-      {/* Floating Small Screen: Live Eye Tracker with Mesh & Blue Eyeball Dots */}
+        </>
+      }
+    >
       {mode === 'typing' && showTrackerFeed && (
         <EyeTrackerFeed
           faceFound={message?.face_found}
@@ -229,97 +256,26 @@ function App() {
         />
       )}
 
-      {/* Main Content Area */}
-      {mode === 'calibrating' ? (
-        <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto overflow-y-auto p-2">
-          {layout && <CalibrationScreen layout={layout} onClose={() => setMode('typing')} />}
-        </div>
-      ) : (
-        <div className="flex flex-1 min-h-0 flex-col w-full max-w-5xl mx-auto gap-2">
-          {/* Text Display */}
-          <div className="shrink-0 space-y-1">
-            <TextDisplay
-              text={message?.text ?? ''}
-              activeWord={message?.active_word}
-              decoderMode={decoderMode}
-              onClear={handleClearText}
+      {/* The keyboard canvas: everything below the control band, edge to edge. */}
+      <div className="relative h-full w-full">
+        {layout ? (
+          <>
+            <VirtualKeyboard
+              layout={layout}
+              hoveredKey={message?.hovered_key ?? null}
+              selectedKey={message?.selected_key ?? null}
+              dwellProgress={message?.dwell_progress ?? 0}
+              keyProbabilities={message?.key_probabilities ?? null}
+              keyLayoutOverride={keyLayoutOverride}
+              spaceLabel={spaceLabel}
             />
-            {suggestions.length > 0 && <SuggestionStrip suggestions={suggestions} />}
-            {decoderMode === 's4' && (
-              <CandidateStrip candidates={message?.candidates ?? []} onPick={handlePickCandidate} />
-            )}
-          </div>
-
-          {socketError && <p className="shrink-0 text-xs text-red-400">{socketError}</p>}
-          {layoutError && <p className="shrink-0 text-xs text-red-400">{layoutError}</p>}
-
-          {/* Virtual Keyboard Box with Mouse Pointer Cursor (exact same aspect-[16/10] layout as calibration) */}
-          <div className="relative aspect-[16/10] w-full max-h-[calc(100vh-165px)] mx-auto overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-            {layout ? (
-              <>
-                <VirtualKeyboard
-                  layout={layout}
-                  hoveredKey={message?.hovered_key ?? null}
-                  selectedKey={message?.selected_key ?? null}
-                  dwellProgress={message?.dwell_progress ?? 0}
-                  keyProbabilities={message?.key_probabilities ?? null}
-                  keyLayoutOverride={keyLayoutOverride}
-                  spaceLabel={spaceLabel}
-                />
-                <GazeCursor x={message?.gaze_x ?? null} y={message?.gaze_y ?? null} />
-              </>
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                Loading keyboard layout...
-              </div>
-            )}
-          </div>
-
-          {/* Bottom Minimal Readout Bar */}
-          <footer className="shrink-0 flex items-center justify-between text-xs text-slate-400 px-2 py-0.5 border-t border-slate-900">
-            <div className="flex items-center gap-4">
-              <span>
-                Pointer: {message?.gaze_x !== null && message?.gaze_x !== undefined
-                  ? `X: ${message.gaze_x.toFixed(2)} | Y: ${message.gaze_y?.toFixed(2)}`
-                  : 'Searching for face...'}
-              </span>
-              {message?.hovered_key && (
-                <span className="font-semibold text-cyan-400">
-                  Target: [{message.hovered_key}] ({Math.round((message.dwell_progress || 0) * 100)}%)
-                </span>
-              )}
-              {typingPaused && (
-                <span className="text-amber-400 font-semibold animate-pulse">⏸️ Typing Paused (Gaze Tracking Only)</span>
-              )}
-              {message?.low_confidence_veto && !typingPaused && (
-                <span className="text-amber-400 font-medium">⚠️ Low confidence selection vetoed</span>
-              )}
-            </div>
-
-            <div className="text-slate-500 text-[11px]">
-              <span className={(message?.fps ?? 0) < 10 ? 'text-amber-400 mr-3' : 'mr-3'}>
-                {message?.fps ? `${message.fps.toFixed(0)} fps (${message.infer_ms ?? 0} ms inference)` : ''}
-              </span>
-              {(message?.mouth_progress ?? 0) > 0 && selectMode === 'mouth' && (
-                <span className="mr-3 font-semibold text-fuchsia-300">
-                  👄 hold… {Math.round((message?.mouth_progress ?? 0) * 100)}%
-                </span>
-              )}
-              {(message?.blink_progress ?? 0) > 0 && selectMode === 'blink' && (
-                <span className="mr-3 font-semibold text-fuchsia-300">
-                  👁️ hold… {Math.round((message?.blink_progress ?? 0) * 100)}%
-                </span>
-              )}
-              <span className="mr-3 text-slate-500">
-                eye {message?.ear?.toFixed(2) ?? '–'} · mouth {message?.mar?.toFixed(2) ?? '–'}
-              </span>
-              {selectMode === 'blink' ? 'Look at a key, hold eyes shut ~0.5s to select · ' : selectMode === 'mouth' ? 'Look at a key, open your mouth wide ~0.4s to select · ' : selectMode === 'switch' ? 'Look at a key, press Space/Enter to select · ' : ''}
-              <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">C</kbd> re-centres.
-            </div>
-          </footer>
-        </div>
-      )}
-    </div>
+            <GazeCursor x={message?.gaze_x ?? null} y={message?.gaze_y ?? null} />
+          </>
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">Loading keyboard layout...</div>
+        )}
+      </div>
+    </Stage>
   )
 }
 

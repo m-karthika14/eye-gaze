@@ -227,6 +227,16 @@ function App() {
               {(message?.blink_progress ?? 0) > 0 && selectMode === 'blink' && (
                 <span className="font-semibold text-fuchsia-300">👁️ hold… {Math.round((message?.blink_progress ?? 0) * 100)}%</span>
               )}
+              {message?.eyes_closed && <span className="font-semibold text-amber-300">⏸ pointer held</span>}
+              {message?.gaze_shift && (Math.abs(message.gaze_shift[0]) > 0.02 || Math.abs(message.gaze_shift[1]) > 0.02) && (
+                <button
+                  onClick={() => sendMessage({ reset_shift: true })}
+                  title="The Recenter (C) button has shifted the whole pointer by this much. Click to remove the shift and go back to the calibrated mapping."
+                  className="rounded border border-amber-500 bg-amber-900/70 px-1.5 py-0.5 font-semibold text-amber-200 hover:bg-amber-800"
+                >
+                  shift {message.gaze_shift[0] >= 0 ? '+' : ''}{message.gaze_shift[0].toFixed(2)} / {message.gaze_shift[1] >= 0 ? '+' : ''}{message.gaze_shift[1].toFixed(2)} ✕ reset
+                </button>
+              )}
               <span className="text-slate-500">
                 eye {message?.ear?.toFixed(2) ?? '–'} · mouth {message?.mar?.toFixed(2) ?? '–'}
               </span>

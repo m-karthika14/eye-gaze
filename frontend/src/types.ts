@@ -61,6 +61,7 @@ export interface GazeMessage {
   mar?: number | null
   blink_progress?: number
   eyes_closed?: boolean
+  gaze_shift?: [number, number]
   active_word?: string
   candidates?: string[]
   fps?: number

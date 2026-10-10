@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import shutil
 import time
 from typing import Any
 
@@ -218,6 +219,10 @@ async def run_calibration_session(websocket: WebSocket) -> None:
         with open(SAMPLES_PATH, "w", encoding="utf-8") as f:
             for s in samples:
                 f.write(json.dumps(s) + "\n")
+        # Keep every run: a mapping's real test is how it holds up in LATER sessions, which needs the earlier data.
+        history_dir = DATA_DIR / "calibration_history"
+        history_dir.mkdir(exist_ok=True)
+        shutil.copyfile(SAMPLES_PATH, history_dir / f"{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
 
         # Learned mapping first: if it validates (leave-one-out), the dashboard and
         # sigma describe IT, not the heuristic mapping the trials were recorded with.

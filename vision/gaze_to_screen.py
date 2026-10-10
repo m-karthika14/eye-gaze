@@ -168,6 +168,18 @@ class GazeToScreenMapper:
         except Exception:  # noqa: BLE001 -- a corrupt model file must not take the app down; fall back to the CNN mapping
             return None
 
+    @property
+    def shift(self) -> tuple[float, float]:
+        """Current recenter() offset (absolute / feature-model mode). (0, 0) = none."""
+        return self._shift
+
+    def reset_shift(self) -> None:
+        """Drop any recenter() offset: back to exactly what calibration learned."""
+        self._shift = (0.0, 0.0)
+        self._filter_x.reset()
+        self._filter_y.reset()
+        self._stable = None
+
     def _make_filter(self) -> OneEuroFilter:
         cfg = self.config
         return OneEuroFilter(min_cutoff=cfg.filter_min_cutoff, beta=cfg.filter_beta, d_cutoff=cfg.filter_d_cutoff)

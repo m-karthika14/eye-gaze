@@ -511,6 +511,7 @@ def fit_affine(samples: list[dict], ridge: float = 1e-4, min_trials: int = 12) -
 
 
 FEATURE_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "eye_feature_model.npz"
+PREFER_IRIS_WITHIN = 1.15  # use the drift-resistant iris-only features unless a wider set is >15% more accurate held-out
 
 
 def fit_feature_mapping(samples: list[dict], min_trials: int = 12) -> dict | None:
@@ -545,6 +546,15 @@ def fit_feature_mapping(samples: list[dict], min_trials: int = 12) -> dict | Non
     if best is None:
         return None
     rmse, name, cols, alpha, loo = best
+    # Drift-robustness prior. Held-out accuracy within one session cannot see how a model ages: a model fitted on all the
+    # eye-region points (lids, skin around the eye) drifted far more over 40 minutes than the iris+corner points
+    # (measured on real data: their pushes on the predicted position were -0.147 vs -0.045 horizontally; the stale
+    # ring-heavy model ended at 25% key hits, vs 66-81% right after a calibration). So the narrow iris subset is
+    # preferred unless a wider one is clearly (> 15%) more accurate.
+    if name != "iris_core" and "iris_core" in by_subset and by_subset["iris_core"] <= PREFER_IRIS_WITHIN * rmse:
+        cols = FEATURE_SUBSETS["iris_core"]
+        alpha, loo, _ = select_alpha(x[:, cols], y)
+        name, rmse = "iris_core", by_subset["iris_core"]
     return {
         "model": fit_ridge(x, y, alpha, columns=cols),
         "alpha": alpha,

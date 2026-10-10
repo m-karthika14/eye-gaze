@@ -199,6 +199,8 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     s4.pick_candidate(int(msg["pick_candidate"]))
                 if msg.get("recenter"):
                     pipeline.mapper.recenter()
+                if msg.get("reset_shift"):
+                    pipeline.mapper.reset_shift()
                 if "invert_x" in msg:
                     pipeline.mapper.config.invert_x = bool(msg["invert_x"])
                 if "invert_y" in msg:
@@ -418,6 +420,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "ear": round(float(sample["ear"]), 2) if sample.get("ear") is not None else None,
                     "mar": round(float(sample["mar"]), 2) if sample.get("mar") is not None else None,
                     "eyes_closed": eyes_closed,
+                    "gaze_shift": [round(pipeline.mapper.shift[0], 3), round(pipeline.mapper.shift[1], 3)],
                     "active_word": s4.active_word if decoder_mode == "s4" else "",
                     "candidates": s4.candidates if decoder_mode == "s4" else [],
                     "fps": round(fps_ema, 1),

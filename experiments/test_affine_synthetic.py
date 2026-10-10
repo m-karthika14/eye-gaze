@@ -164,6 +164,10 @@ def main() -> None:
     first_look_centre.recenter()  # user presses C while looking at the centre of the keyboard
     assert abs(first_look_centre.map(0.05, -0.1, 3.2).raw_x - 0.5) < 1e-9
     print("[OK] recenter (C) shifts the absolute mapping so the current gaze maps to the centre")
+    assert first_look_centre.shift != (0.0, 0.0)
+    first_look_centre.reset_shift()  # the footer's "shift ... reset" button: back to exactly what calibration learned
+    assert first_look_centre.shift == (0.0, 0.0) and abs(first_look_centre.map(0.05, -0.1, 3.3).raw_x - 0.25) < 1e-9
+    print("[OK] reset_shift removes the recenter offset again")
 
     # --- fit on absolute, 0.5s-averaged angles when the trials carry them
     def abs_samples(seed: int, n: int = 36) -> list[dict]:

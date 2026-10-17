@@ -183,14 +183,14 @@ function App() {
 
               <button
                 onClick={toggleFullscreen}
-                title="Browser full screen (F11): the keyboard then covers the whole display. Re-run Calibrate after changing window size."
+                title="Browser full screen (F11): the keyboard then covers the whole display. Re-run Accuracy Check after changing window size."
                 className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}
               >
                 ⛶ Full screen
               </button>
 
               <button onClick={() => setMode('calibrating')} className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}>
-                Calibrate
+                Accuracy Check
               </button>
             </div>
           </header>
@@ -211,7 +211,7 @@ function App() {
                   onClick={() => setMode('calibrating')}
                   className="animate-pulse whitespace-nowrap rounded border border-amber-500 bg-amber-900/70 px-2 py-0.5 font-semibold text-amber-200 hover:bg-amber-800"
                 >
-                  ⚠ Not calibrated for this window size — what you look at won&apos;t match the keys. Click to calibrate
+                  ⚠ Not calibrated for this window size — what you look at won&apos;t match the keys. Click for accuracy check
                 </button>
               )}
             </div>

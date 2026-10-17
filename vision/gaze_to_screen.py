@@ -56,6 +56,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, fields
 
+import numpy as np
+
 from .one_euro_filter import OneEuroFilter
 
 
@@ -113,6 +115,9 @@ class GazeMappingConfig:
     # replaces the gaze-CNN affine mapping entirely; written by Calibrate only when it beats the CNN mapping on
     # held-out trials.
     feature_model: str | None = None
+    # Average the eye features over the last N frames before the feature model sees them (calibration trains on 0.5 s means,
+    # a single live frame is noisier). 1 = off.
+    feature_avg_frames: int = 1
 
     @classmethod
     def from_yaml(cls, path: str) -> "GazeMappingConfig":
@@ -151,6 +156,8 @@ class GazeToScreenMapper:
         self._shift = (0.0, 0.0)  # absolute mode: output offset set by recenter()
         self._feature_model = self._load_feature_model()
         self._last_unshifted: tuple[float, float] | None = None
+        self._feat_window: list = []
+        self._unshifted_hist: list[tuple[float, float, float]] = []  # (t, x, y) before the recenter shift, last ~1 s
 
     def _load_feature_model(self):
         path = self.config.feature_model
@@ -167,6 +174,11 @@ class GazeToScreenMapper:
             return FeatureModel.load(p) if p.exists() else None
         except Exception:  # noqa: BLE001 -- a corrupt model file must not take the app down; fall back to the CNN mapping
             return None
+
+    def _remember_unshifted(self, t: float, x: float, y: float) -> None:
+        self._unshifted_hist.append((t, x, y))
+        while self._unshifted_hist and t - self._unshifted_hist[0][0] > 1.0:
+            self._unshifted_hist.pop(0)
 
     @property
     def shift(self) -> tuple[float, float]:
@@ -214,6 +226,7 @@ class GazeToScreenMapper:
 
     def reset(self) -> None:
         """Call when the face is lost, so the next detection doesn't lerp from a stale point."""
+        self._feat_window = []
         self._filter_x.reset()
         self._filter_y.reset()
         self._stable = None
@@ -224,7 +237,11 @@ class GazeToScreenMapper:
         if (cfg.affine_absolute and cfg.affine_x and cfg.affine_y) or self._feature_model is not None:
             # Absolute mode: shift the output so wherever the user is looking right now maps to the centre.
             if self._last_unshifted is not None:
-                self._shift = (0.5 - self._last_unshifted[0], 0.5 - self._last_unshifted[1])
+                # Median of the last second, not the last frame: one noisy frame would shift everything by its error.
+                hist = self._unshifted_hist
+                ref = (float(np.median([h[1] for h in hist])), float(np.median([h[2] for h in hist]))) if len(hist) >= 3 else self._last_unshifted
+                self._shift = (0.5 - ref[0], 0.5 - ref[1])
+                self._unshifted_hist = []
             self._filter_x.reset()
             self._filter_y.reset()
             self._stable = None
@@ -300,8 +317,13 @@ class GazeToScreenMapper:
             self._range_pitch = min(max(self._range_pitch, abs(rel_pitch)), cfg.max_range_rad)
 
             if use_features:
+                if cfg.feature_avg_frames > 1:
+                    self._feat_window.append(np.asarray(features, dtype=np.float64))
+                    del self._feat_window[: -cfg.feature_avg_frames]
+                    features = np.mean(self._feat_window, axis=0)
                 raw_x, raw_y = (float(v) for v in self._feature_model.predict(features))
                 self._last_unshifted = (raw_x, raw_y)
+                self._remember_unshifted(timestamp, raw_x, raw_y)
                 raw_x += self._shift[0]
                 raw_y += self._shift[1]
             elif cfg.affine_x and cfg.affine_y and len(cfg.affine_x) in (3, 6) and len(cfg.affine_y) == len(cfg.affine_x):
@@ -315,6 +337,7 @@ class GazeToScreenMapper:
                     raw_y += sum(c * h for c, h in zip(ay[3:], head))
                 if absolute:
                     self._last_unshifted = (raw_x, raw_y)
+                    self._remember_unshifted(timestamp, raw_x, raw_y)
                     raw_x += self._shift[0]
                     raw_y += self._shift[1]
             else:

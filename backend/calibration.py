@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import shutil
 import time
 from typing import Any
@@ -73,9 +74,10 @@ async def run_calibration_session(websocket: WebSocket) -> None:
 
     stop_requested = False
     canvas: list[float] | None = None  # keyboard canvas size in px, sent by the UI when the session opens
+    participant = ""  # optional study participant id (letters, digits, - _), sent by the UI; tags every trial of this run
 
     async def receive_control_messages() -> None:
-        nonlocal stop_requested, canvas
+        nonlocal stop_requested, canvas, participant
         try:
             while True:
                 msg = await websocket.receive_json()
@@ -83,6 +85,8 @@ async def run_calibration_session(websocket: WebSocket) -> None:
                     stop_requested = True
                 if isinstance(msg.get("canvas"), list) and len(msg["canvas"]) == 2:
                     canvas = [float(msg["canvas"][0]), float(msg["canvas"][1])]
+                if isinstance(msg.get("participant"), str):
+                    participant = re.sub(r"[^A-Za-z0-9_-]", "", msg["participant"])[:24]
         except Exception:  # noqa: BLE001 -- connection closing; main loop exits too
             pass
 
@@ -216,18 +220,21 @@ async def run_calibration_session(websocket: WebSocket) -> None:
             return
 
         DATA_DIR.mkdir(exist_ok=True)
+        if participant:
+            for s in samples:
+                s["participant"] = participant
         with open(SAMPLES_PATH, "w", encoding="utf-8") as f:
             for s in samples:
                 f.write(json.dumps(s) + "\n")
         # Keep every run: a mapping's real test is how it holds up in LATER sessions, which needs the earlier data.
         history_dir = DATA_DIR / "calibration_history"
         history_dir.mkdir(exist_ok=True)
-        shutil.copyfile(SAMPLES_PATH, history_dir / f"{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+        shutil.copyfile(SAMPLES_PATH, history_dir / f"{time.strftime('%Y%m%d_%H%M%S')}{'_' + participant if participant else ''}.jsonl")
 
         # Learned mapping first: if it validates (leave-one-out), the dashboard and
         # sigma describe IT, not the heuristic mapping the trials were recorded with.
-        affine = fit_affine(samples)
-        feature_fit = fit_feature_mapping(samples)
+        affine = await loop.run_in_executor(None, fit_affine, samples)
+        feature_fit = await loop.run_in_executor(None, fit_feature_mapping, samples)  # frame-level fit takes a while: keep the socket alive
         # Two candidate mappings, compared on the SAME held-out trials: the gaze-CNN angle fit, and the EyeTrax-style
         # eye/iris-landmark ridge regression. Keep the feature model only if it is clearly more accurate.
         use_features = feature_fit is not None and (affine is None or feature_fit["loo_rmse"] < 0.92 * affine["loo_rmse"])

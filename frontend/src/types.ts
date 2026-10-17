@@ -53,7 +53,8 @@ export interface GazeMessage {
   pitch_deg?: number | null
   yaw_deg?: number | null
   typing_paused?: boolean
-  decoder_mode?: 's4' | 's0'
+  decoder_mode?: 's0' | 's1' | 's2' | 's3' | 's4'
+  online_bias?: [number, number] | null
   select_mode?: 'dwell' | 'switch' | 'blink' | 'mouth'
   calibration_stale?: boolean | null
   mouth_progress?: number

@@ -175,6 +175,7 @@ class GazePipeline:
                 "ear": result.ear,
                 "raw_angle_mean": angle_mean,
                 "eye_feat_mean": feat_mean,
+                "eye_feat_recent": recent_feats,
                 "face_feat": face_feat,
                 "eyes_closed": blink.eyes_closed,
                 "gaze_held": hold_gaze,

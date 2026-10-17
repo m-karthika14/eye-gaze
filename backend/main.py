@@ -32,6 +32,7 @@ from decoder.char_lm import CharLM
 from decoder.key_probability import DEFAULT_MIN_SIGMA, key_probabilities
 from decoder.nearest_key import DEFAULT_LAYOUT_PATH, KeyboardLayout
 from experiments.s0 import S0Event, S0System
+from decoder.live_modes import LIVE_DECODERS
 from decoder.s4_live import S4LiveDecoder
 from llm_services.word_suggestions import WordSuggester
 from vision.face_gaze import annotate_eye_tracker_frame
@@ -122,6 +123,26 @@ def video_feed() -> StreamingResponse:
     return StreamingResponse(frame_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+@app.get("/config/evaluation-phrases")
+def evaluation_phrases() -> dict:
+    """The fixed phrase set for the typing study (config/evaluation_phrases.txt)."""
+    path = Path(__file__).resolve().parent.parent / "config" / "evaluation_phrases.txt"
+    phrases = [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
+    return {"phrases": phrases}
+
+
+def _append_study_log(record: dict) -> None:
+    """One JSON line per finished phrase, per participant: data/sessions/<participant>.jsonl. Only called when the UI is in study mode."""
+    import re
+
+    pid = re.sub(r"[^A-Za-z0-9_-]", "", str(record.get("participant", "")))[:24] or "anonymous"
+    out_dir = Path(__file__).resolve().parent.parent / "data" / "sessions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    record = {**record, "participant": pid, "logged_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    with open(out_dir / f"{pid}.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 @app.get("/config/keyboard-layout")
 def keyboard_layout() -> dict:
     return json.loads(DEFAULT_LAYOUT_PATH.read_text(encoding="utf-8"))
@@ -150,6 +171,13 @@ async def ws_gaze(websocket: WebSocket) -> None:
     s0 = S0System(layout=_layout)
     sigma_floor, sigma_ceiling = _load_live_sigma_bounds()
     s4 = S4LiveDecoder(layout=_layout, char_lm=_char_lm, sigma_floor=sigma_floor, sigma_ceiling=sigma_ceiling)
+    # All five systems as live decoders (S0-S3: decoder/live_modes.py, S4: decoder/s4_live.py), switchable from the dashboard.
+    # They share the same camera, mapping and selection method (blink / Space-Enter / dwell / mouth), so only the decoding differs.
+    decoders = {
+        m: cls(layout=_layout, char_lm=_char_lm, lexicon=s4.lexicon, sigma_floor=sigma_floor, sigma_ceiling=sigma_ceiling)
+        for m, cls in LIVE_DECODERS.items()
+    }
+    decoders["s4"] = s4
     fps_ema = 0.0
     calibrated_canvas = _calibrated_canvas()
     current_canvas: list[float] | None = None
@@ -163,6 +191,7 @@ async def ws_gaze(websocket: WebSocket) -> None:
     # "dwell" = hold gaze ~0.8s. Switch is the default because dwell selects whatever you
     # happen to rest your eyes on (reading, hunting for the next key) -- the Midas-touch problem.
     settings = {"adaptive_keyboard": False, "decoder_mode": "s4", "select_mode": "blink"}
+    study: dict = {"started": None, "selections": 0, "backspaces": 0, "picks": 0}  # per-phrase counters, only used in study mode
     last_layout_text: str | None = None
     key_layout_payload: dict | None = None
     suggestions: list[str] = []
@@ -180,13 +209,10 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     settings["adaptive_keyboard"] = bool(msg["adaptive_keyboard"])
                 if "decoder_mode" in msg:
                     dm = str(msg["decoder_mode"]).lower()
-                    if dm in ("s0", "s4"):
-                        if dm != settings.get("decoder_mode"):
-                            if dm == "s4":
-                                s4.set_text(s0.buffer.text)
-                            else:
-                                s0.buffer.reset()
-                                s0.buffer.text = s4.current_text
+                    if dm in decoders:
+                        previous = settings.get("decoder_mode", "s4")
+                        if dm != previous:  # carry the text across so switching modes mid-sentence doesn't lose it
+                            decoders[dm].set_text(decoders[previous].current_text)
                         settings["decoder_mode"] = dm
                 if "select_mode" in msg and str(msg["select_mode"]) in ("dwell", "switch", "blink", "mouth"):
                     settings["select_mode"] = str(msg["select_mode"])
@@ -194,9 +220,37 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     settings["pending_select"] = True
                 if msg.get("clear_text"):
                     s0.reset()
-                    s4.reset()
-                if "pick_candidate" in msg and settings.get("decoder_mode") == "s4":
-                    s4.pick_candidate(int(msg["pick_candidate"]))
+                    for d in decoders.values():
+                        d.reset()
+                if msg.get("study_start"):
+                    # Study mode: a new phrase begins. Clear the text and start counting on the server (each selection happens exactly once here).
+                    study.update(started=time.monotonic(), selections=0, backspaces=0, picks=0)
+                    s0.reset()
+                    for d in decoders.values():
+                        d.reset()
+                if isinstance(msg.get("study_done"), dict) and study.get("started") is not None:
+                    cur = decoders[settings.get("decoder_mode", "s4")]
+                    _append_study_log(
+                        {
+                            **msg["study_done"],
+                            "typed": cur.current_text.strip(),
+                            "elapsed_s": round(time.monotonic() - study["started"], 2),
+                            "selections": study["selections"],
+                            "backspaces": study["backspaces"],
+                            "candidate_picks": study["picks"],
+                            "decoder_mode": settings.get("decoder_mode"),
+                            "select_mode": settings.get("select_mode"),
+                            # which mapping this phrase was typed with: a generic one (built from other people) or the person's own
+                            "mapping": "generic" if "generic" in str(pipeline.mapper.config.feature_model or "") else "personal",
+                        }
+                    )
+                    study["started"] = None
+                    s0.reset()
+                    for d in decoders.values():
+                        d.reset()
+                if "pick_candidate" in msg:
+                    if decoders[settings.get("decoder_mode", "s4")].pick_candidate(int(msg["pick_candidate"])) and study.get("started") is not None:
+                        study["picks"] += 1
                 if msg.get("recenter"):
                     pipeline.mapper.recenter()
                 if msg.get("reset_shift"):
@@ -262,10 +316,14 @@ async def ws_gaze(websocket: WebSocket) -> None:
             if sample_fps:
                 fps_ema = sample_fps if fps_ema == 0.0 else 0.9 * fps_ema + 0.1 * sample_fps
 
+            decoder_mode = settings.get("decoder_mode", "s4")
+            dec = decoders.get(decoder_mode, s4)
+            layout_adaptive = bool(getattr(dec, "adaptive_layout", False))  # S2 / S3: confidence-aware adaptive keyboard
             adaptive_on = settings["adaptive_keyboard"]
-            if not adaptive_on and s0.layout is not _layout:
+            if not adaptive_on and not layout_adaptive and s0.layout is not _layout:
                 s0.layout = _layout
-                s4.layout = _layout
+                for d in decoders.values():
+                    d.layout = _layout
                 last_layout_text = None
                 key_layout_payload = None
 
@@ -292,7 +350,8 @@ async def ws_gaze(websocket: WebSocket) -> None:
 
             decoder_mode = settings.get("decoder_mode", "s4")
             now_ts = time.monotonic()
-            s4.dwell_enabled = settings.get("select_mode", "blink") == "dwell"
+            for d in decoders.values():
+                d.dwell_enabled = settings.get("select_mode", "blink") == "dwell"
             select_mode_now = settings.get("select_mode", "blink")
             pipeline.hold_on_blink = select_mode_now == "blink"  # freeze gaze only for the ACTIVE gesture mode
             pipeline.hold_on_mouth = select_mode_now == "mouth"
@@ -306,43 +365,45 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 dwell_x, dwell_y = sample["gaze_x"], sample["gaze_y"]
             else:
                 dwell_x, dwell_y = None, None
-            if decoder_mode == "s4" and eyes_closed:
-                event = s4.hold()  # keep the highlight frozen while the eyes are shut
-            elif decoder_mode == "s4":
-                event = s4.process_sample(
+            if eyes_closed:
+                event = dec.hold()  # keep the highlight frozen while the eyes are shut
+            else:
+                event = dec.process_sample(
                     dwell_x,
                     dwell_y,
                     now_ts,
                     min_sigma=min_sigma,
                     sigma_scale=sigma_scale,
                 )
-            else:
-                event = s0.process_sample(dwell_x, dwell_y, now_ts)
 
-            if pending_select and decoder_mode == "s4" and not settings.get("typing_paused"):
-                event = s4.select_now(now_ts, sigma_scale=sigma_scale)
+            if pending_select and not settings.get("typing_paused"):
+                event = dec.select_now(now_ts, sigma_scale=sigma_scale)
             elif (
                 (
                     (sample.get("blink_fired") and settings.get("select_mode") == "blink")
                     or (sample.get("mouth_fired") and settings.get("select_mode") == "mouth")
                 )
-                and decoder_mode == "s4"
                 and not settings.get("typing_paused")
             ):
                 # Deliberate blink: select the key highlighted just BEFORE the lids dropped.
                 closed_since = (
                     sample.get("blink_closed_since") if settings.get("select_mode") == "blink" else sample.get("mouth_since")
                 ) or now_ts
-                event = s4.select_now(now_ts, sigma_scale=sigma_scale, at_time=closed_since - 0.25)
+                event = dec.select_now(now_ts, sigma_scale=sigma_scale, at_time=closed_since - 0.25)
 
             # When typing is paused (testing / eyeball tracking mode), do not commit key selections
             if settings.get("typing_paused"):
                 event = S0Event(
-                    text=s4.current_text if decoder_mode == "s4" else s0.buffer.text,
+                    text=dec.current_text,
                     selected_key=None,
                     hovered_key=event.hovered_key,
                     dwell_progress=event.dwell_progress,
                 )
+
+            if event.selected_key and study.get("started") is not None:
+                study["selections"] += 1
+                if event.selected_key == "BACKSPACE":
+                    study["backspaces"] += 1
 
             low_confidence_veto = False
             if (
@@ -354,14 +415,11 @@ async def ws_gaze(websocket: WebSocket) -> None:
                 # Phase 8's low-confidence fallback, pulled forward: don't
                 # force a character out of a distribution the system itself
                 # isn't confident about -- undo what was just committed.
-                if decoder_mode == "s4":
-                    if s4.active_word_obs:
-                        s4.active_word_obs.pop()
-                        s4.active_word = s4._decode_active(min_sigma=min_sigma)
-                else:
-                    s0.buffer.apply_key("BACKSPACE")
+                if dec.active_word_obs:
+                    dec.active_word_obs.pop()
+                    dec.active_word = dec._decode_active(min_sigma=min_sigma)
                 event = S0Event(
-                    text=s4.current_text if decoder_mode == "s4" else s0.buffer.text,
+                    text=dec.current_text,
                     selected_key=None,
                     hovered_key=event.hovered_key,
                     dwell_progress=event.dwell_progress,
@@ -383,7 +441,8 @@ async def ws_gaze(websocket: WebSocket) -> None:
 
                 if event.text != last_layout_text:
                     s0.layout = compute_adaptive_layout(_layout, _char_lm, event.text)
-                    s4.layout = s0.layout
+                    for d in decoders.values():
+                        d.layout = s0.layout
                     last_layout_text = event.text
                     key_layout_payload = _layout_payload(s0.layout)
 
@@ -400,7 +459,16 @@ async def ws_gaze(websocket: WebSocket) -> None:
                         suggestions = []
                     pending_prefix = current_word
             else:
-                key_layout_payload = None
+                if layout_adaptive:
+                    # S2 / S3: resize keys by next-letter likelihood after every committed change (no Groq suggestions involved)
+                    if event.text != last_layout_text:
+                        s0.layout = compute_adaptive_layout(_layout, _char_lm, event.text)
+                        for d in decoders.values():
+                            d.layout = s0.layout
+                        last_layout_text = event.text
+                        key_layout_payload = _layout_payload(s0.layout)
+                else:
+                    key_layout_payload = None
                 suggestions = []
 
             await websocket.send_json(
@@ -421,8 +489,9 @@ async def ws_gaze(websocket: WebSocket) -> None:
                     "mar": round(float(sample["mar"]), 2) if sample.get("mar") is not None else None,
                     "eyes_closed": eyes_closed,
                     "gaze_shift": [round(pipeline.mapper.shift[0], 3), round(pipeline.mapper.shift[1], 3)],
-                    "active_word": s4.active_word if decoder_mode == "s4" else "",
-                    "candidates": s4.candidates if decoder_mode == "s4" else [],
+                    "active_word": dec.active_word,
+                    "candidates": dec.candidates,
+                    "online_bias": [round(dec.bias[0], 3), round(dec.bias[1], 3)] if hasattr(dec, "bias") else None,
                     "fps": round(fps_ema, 1),
                     "infer_ms": round(sample.get("infer_ms") or 0.0),
                     "fixation": fixation_payload,

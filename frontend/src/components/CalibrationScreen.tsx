@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useCalibrationSocket } from '../hooks/useCalibrationSocket'
 import type { KeyboardLayoutData } from '../types'
 import { GazeCursor } from './GazeCursor'
@@ -19,6 +20,13 @@ interface Props {
  */
 export function CalibrationScreen({ layout, onClose }: Props) {
   const { message, status, start, stop } = useCalibrationSocket()
+  const [participant, setParticipant] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem('participantId') ?? ''
+    } catch {
+      return ''
+    }
+  })
 
   const trial = message?.phase === 'trial' ? message : null
   const done = message?.phase === 'done' ? message : null
@@ -76,8 +84,24 @@ export function CalibrationScreen({ layout, onClose }: Props) {
                   (move only your eyes), sit at a consistent distance, and avoid backlighting. The keys include the
                   far left and right edges, so look all the way out to them. Takes a couple of minutes.
                 </p>
+                <label className="mt-3 block text-xs text-slate-400">
+                  Participant ID (optional -- for a study; tags this run in data/calibration_history/)
+                  <input
+                    value={participant}
+                    onChange={(e) => {
+                      setParticipant(e.target.value)
+                      try {
+                        window.localStorage.setItem('participantId', e.target.value)
+                      } catch {
+                        /* storage unavailable: the id just isn't remembered */
+                      }
+                    }}
+                    placeholder="e.g. P03"
+                    className="mt-1 block w-48 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+                  />
+                </label>
                 <button
-                  onClick={start}
+                  onClick={() => start(participant.trim())}
                   className="mt-3 rounded bg-emerald-700 px-4 py-2 text-sm font-medium hover:bg-emerald-600"
                 >
                   Start accuracy check

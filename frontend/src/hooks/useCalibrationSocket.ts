@@ -17,7 +17,7 @@ export function useCalibrationSocket() {
   const [status, setStatus] = useState<CalibrationStatus>('idle')
   const wsRef = useRef<WebSocket | null>(null)
 
-  const start = useCallback(() => {
+  const start = useCallback((participant?: string) => {
     if (wsRef.current) return
     setMessage(null)
     setStatus('connecting')
@@ -26,7 +26,7 @@ export function useCalibrationSocket() {
 
     ws.onopen = () => {
       setStatus('running')
-      ws.send(JSON.stringify({ canvas: canvasSize() })) // stamped into the config so typing can tell if the window changed
+      ws.send(JSON.stringify({ canvas: canvasSize(), ...(participant ? { participant } : {}) })) // canvas: stamped into the config so typing can tell if the window changed; participant: tags this run in data/calibration_history/
     }
     ws.onclose = () => {
       wsRef.current = null

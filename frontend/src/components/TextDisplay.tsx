@@ -1,7 +1,7 @@
 interface Props {
   text: string
   activeWord?: string
-  decoderMode?: 's4' | 's0'
+  decoderMode?: 's0' | 's1' | 's2' | 's3' | 's4'
   onClear?: () => void
 }
 
@@ -16,10 +16,10 @@ export function TextDisplay({ text, activeWord, decoderMode = 's4', onClear }: P
         )}
         <span className="animate-pulse text-cyan-400">|</span>
 
-        {decoderMode === 's4' && activeWord && (
+        {decoderMode !== 's0' && activeWord && (
           <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-950/80 border border-emerald-500/50 px-2 py-0.5 text-xs font-semibold text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
-            S4: &quot;{activeWord}&quot;
+            {decoderMode.toUpperCase()}: &quot;{activeWord}&quot;
           </span>
         )}
       </div>

@@ -4,6 +4,7 @@ import { EyeTrackerFeed } from './components/EyeTrackerFeed'
 import { CandidateStrip } from './components/CandidateStrip'
 import { GazeCursor } from './components/GazeCursor'
 import { Stage, canvasSize } from './components/Stage'
+import { StudyBar } from './components/StudyBar'
 import { SuggestionStrip } from './components/SuggestionStrip'
 import { TextDisplay } from './components/TextDisplay'
 import { VirtualKeyboard } from './components/VirtualKeyboard'
@@ -19,8 +20,9 @@ function App() {
   const adaptiveEnabled = false
   const [typingPaused, setTypingPaused] = useState<boolean>(false)
   const [showTrackerFeed, setShowTrackerFeed] = useState<boolean>(false)
-  const [decoderMode, setDecoderMode] = useState<'s4' | 's0'>('s4')
+  const [decoderMode, setDecoderMode] = useState<'s0' | 's1' | 's2' | 's3' | 's4'>('s4')
   const [selectMode, setSelectMode] = useState<'dwell' | 'switch' | 'blink' | 'mouth'>('blink')
+  const [studyOn, setStudyOn] = useState<boolean>(false) // typing-study helper (phrase prompts + logging); off by default
 
   // Sync state from backend if received
   useEffect(() => {
@@ -79,8 +81,7 @@ function App() {
     sendMessage({ select_mode: next })
   }
 
-  function toggleDecoderMode() {
-    const next = decoderMode === 's4' ? 's0' : 's4'
+  function chooseDecoder(next: 's0' | 's1' | 's2' | 's3' | 's4') {
     setDecoderMode(next)
     sendMessage({ decoder_mode: next })
   }
@@ -95,7 +96,8 @@ function App() {
 
   const suggestions = adaptiveEnabled ? (message?.suggestions ?? []) : []
   // When adaptive is disabled, do NOT merge or resize keys
-  const keyLayoutOverride = adaptiveEnabled ? (message?.key_layout ?? null) : null
+  // S2 / S3 use the confidence-aware adaptive keyboard (keys resize); every other mode keeps the fixed layout.
+  const keyLayoutOverride = adaptiveEnabled || decoderMode === 's2' || decoderMode === 's3' ? (message?.key_layout ?? null) : null
   const spaceLabel = suggestions.length > 0 ? `SPACE (${suggestions[0]})` : null
 
   if (mode === 'calibrating') {
@@ -128,17 +130,27 @@ function App() {
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                onClick={toggleDecoderMode}
-                title="Toggle between S4 (language-model word decoder) and S0 (raw nearest key)"
-                className={`${btn} ${
-                  decoderMode === 's4'
-                    ? 'border-emerald-500 bg-emerald-800/90 text-emerald-100 hover:bg-emerald-700'
-                    : 'border-amber-600 bg-amber-900/85 text-amber-100 hover:bg-amber-800'
-                }`}
-              >
-                {decoderMode === 's4' ? '🧠 S4 decoder' : '🔤 S0 raw key'}
-              </button>
+              {/* The five systems of the study, switchable live (same camera, mapping and selection method) */}
+              <div className="flex overflow-hidden rounded-md border border-emerald-700" role="group" aria-label="Decoder system">
+                {([
+                  ['s0', 'S0', 'Gaze to nearest key to text. No language model, no correction (baseline).'],
+                  ['s1', 'S1', 'Hard-selected keys; the whole word is corrected afterwards at SPACE with the character language model.'],
+                  ['s2', 'S2', 'S1 plus the adaptive keyboard: keys resize by how likely each next letter is.'],
+                  ['s3', 'S3', 'S2 plus online adaptation: learns your gaze bias from your own corrections (no calibration screen).'],
+                  ['s4', 'S4', 'Joint decoding of the full gaze probability distribution with the language model (the proposed method).'],
+                ] as const).map(([m, label, tip]) => (
+                  <button
+                    key={m}
+                    onClick={() => chooseDecoder(m)}
+                    title={tip}
+                    className={`whitespace-nowrap px-2 py-1 text-[11px] font-semibold transition-colors ${
+                      decoderMode === m ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
               <button
                 onClick={toggleSelectMode}
@@ -182,6 +194,14 @@ function App() {
               </button>
 
               <button
+                onClick={() => setStudyOn(!studyOn)}
+                title="Typing-study helper: shows a target phrase and logs each finished phrase (typed text, time, selections, backspaces, system, selection method) per participant"
+                className={`${btn} ${studyOn ? 'border-sky-500 bg-sky-800 text-sky-100' : 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+              >
+                🧪 Study
+              </button>
+
+              <button
                 onClick={toggleFullscreen}
                 title="Browser full screen (F11): the keyboard then covers the whole display. Re-run Accuracy Check after changing window size."
                 className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}
@@ -201,8 +221,14 @@ function App() {
           {/* Row 3: alternatives (left) and live readouts (right) */}
           <div className="flex min-h-6 w-full items-center justify-between gap-3 overflow-hidden text-[11px] text-slate-400">
             <div className="flex min-w-0 items-center gap-3">
+              {studyOn && <StudyBar message={message} sendMessage={sendMessage} />}
               {suggestions.length > 0 && <SuggestionStrip suggestions={suggestions} />}
-              {decoderMode === 's4' && <CandidateStrip candidates={message?.candidates ?? []} onPick={handlePickCandidate} />}
+              {decoderMode !== 's0' && <CandidateStrip candidates={message?.candidates ?? []} onPick={handlePickCandidate} />}
+              {decoderMode === 's3' && message?.online_bias && (
+                <span title="S3's running estimate of your gaze bias (subtracted from your gaze); starts at 0 and is learned from your corrections" className="whitespace-nowrap text-fuchsia-300">
+                  learned bias {message.online_bias[0] >= 0 ? '+' : ''}{message.online_bias[0].toFixed(3)} / {message.online_bias[1] >= 0 ? '+' : ''}{message.online_bias[1].toFixed(3)}
+                </span>
+              )}
               {socketError && <span className="text-red-400">{socketError}</span>}
               {layoutError && <span className="text-red-400">{layoutError}</span>}
               {typingPaused && <span className="animate-pulse font-semibold text-amber-400">⏸️ Typing paused</span>}

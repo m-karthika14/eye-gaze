@@ -1,0 +1,548 @@
+{
+  "generic": {
+    "participants": [
+      "2"
+    ],
+    "modes": {
+      "s0": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.8181818181818182,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 1.752289924332935,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.3636363636363635,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s1": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.4166666666666667,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 0.6666666666666666,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 2.3293432546101585,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s2": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.2,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 0.5,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 3.7664783427495294,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.0666666666666667,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s3": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.42105263157894735,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 2.3039611964430073,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 0.9473684210526315,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s4": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.8235294117647058,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 4.328453214513049,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 0.29411764705882354,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      }
+    },
+    "paired_vs_S4": {}
+  },
+  "personal": {
+    "participants": [
+      "2"
+    ],
+    "modes": {
+      "s0": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.9166666666666666,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 7.265388496468214,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 0.4166666666666667,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s1": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.7222222222222222,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 3.486682808716707,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 0.6111111111111112,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s2": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.2,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 0.75,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 1.8216779678170225,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.2666666666666666,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.05263157894736842,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s3": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.25,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 2.261306532663317,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      },
+      "s4": {
+        "n_participants": 1,
+        "n_phrases": 1,
+        "cer": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wer": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "exact": {
+          "mean": 1.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "wpm": {
+          "mean": 1.2256267409470751,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "kspc": {
+          "mean": 1.1818181818181819,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "bs_rate": {
+          "mean": 0.07692307692307693,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        },
+        "picks": {
+          "mean": 0.0,
+          "ci95": [
+            NaN,
+            NaN
+          ]
+        }
+      }
+    },
+    "paired_vs_S4": {}
+  }
+}

@@ -43,9 +43,9 @@ drift_max_alpha: 0.2     # per-update cap, so one long pause/gap can't snap the 
 # real target instead of one it passed through on the way). If it still feels
 # laggy on fast glances, raise filter_beta; if the dot is jittery while
 # holding still, lower filter_min_cutoff.
-filter_min_cutoff: 1.2   # was 0.5: with the eye-landmark model the pointer was ~420ms behind the gaze after a move; 1.2/3.0/0.03 lands in ~200ms (simulated at 0.05 per-frame noise)
-filter_beta: 3.0
-stability_radius: 0.03  # cursor leash (see vision/gaze_to_screen.py); it also leaves the pointer up to this far short of your gaze after a move, so keep it small
+filter_min_cutoff: 0.4   # was 0.5: with the eye-landmark model the pointer was ~420ms behind the gaze after a move; 1.2/3.0/0.03 lands in ~200ms (simulated at 0.05 per-frame noise)
+filter_beta: 1.5
+stability_radius: 0.07  # cursor leash (see vision/gaze_to_screen.py); it also leaves the pointer up to this far short of your gaze after a move, so keep it small
 filter_d_cutoff: 1.0
 
 # Vision speed (vision/face_gaze.py). The original setup (RetinaFace at 640x640 +
@@ -70,14 +70,16 @@ blink_min_ms: 450
 # While these two are present they REPLACE half_fov_*/invert_x/invert_y above (the Invert buttons in the
 # app do nothing). Delete both keys to go back to the heuristic mapping.
 affine_x:
-- 0.5014
-- 1.9025
-- -0.1037
+- 0.4256
+- 1.8528
+- -0.4369
 affine_y:
-- -0.1353
-- -0.4845
-- -2.9654
+- -0.0216
+- 0.3941
+- -3.7049
 calibrated_canvas:
 - 1280
 - 537
 affine_absolute: true
+feature_model: models/eye_feature_model.npz
+feature_avg_frames: 5

@@ -381,6 +381,10 @@ def face_fields(sample: dict) -> dict:
     e = sample.get("eye_feat_mean")  # EyeTrax-style eye/iris features averaged over the last 0.5s (vision/eye_features.py)
     if e is not None:
         out["eye_feat"] = [round(float(v), 5) for v in e]
+    r = sample.get("eye_feat_recent")  # the individual frames behind that mean: the model is trained on frames, as it is used on frames
+    if r and len(r) >= 3:
+        pick = np.linspace(0, len(r) - 1, min(len(r), FRAMES_PER_TRIAL)).round().astype(int)
+        out["eye_frames"] = [[round(float(v), 4) for v in r[i]] for i in pick]
     return out
 
 
@@ -511,7 +515,35 @@ def fit_affine(samples: list[dict], ridge: float = 1e-4, min_trials: int = 12) -
 
 
 FEATURE_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "eye_feature_model.npz"
-PREFER_IRIS_WITHIN = 1.15  # use the drift-resistant iris-only features unless a wider set is >15% more accurate held-out
+FRAMES_PER_TRIAL = 10  # individual eye-feature frames stored per calibration trial (eye_frames)
+FRAME_NOISE = 0.004  # per-frame jitter of a head-normalised landmark coordinate, beyond what a 0.5 s mean carries
+NOISY_ALPHAS = (1.0, 3.0, 10.0, 30.0, 100.0, 300.0)
+FRAME_ALPHAS = (10.0, 100.0, 1000.0)  # frame rows are ~10x more numerous, so the same strength is relatively weaker: coarser, higher grid
+
+
+def noisy_loo(x: np.ndarray, y: np.ndarray, cols, reps: int = 8):
+    """Yield (alpha, mean leave-one-trial-out prediction, RMSE) where each held-out trial is fed `reps` noisy single-frame versions
+    of its features; the RMSE is over all of those noisy predictions."""
+    from vision.eye_features import N_FEATURES
+    from vision.feature_model import fit_ridge
+
+    rng = np.random.default_rng(0)
+    noisy_cols = [c for c in cols if c < N_FEATURES - 3]  # not yaw/pitch/roll
+    extra = FRAME_NOISE * np.sqrt(1 - 1 / 9)
+    n = len(x)
+    noise = rng.normal(0, extra, (reps, n, len(noisy_cols)))
+    for alpha in NOISY_ALPHAS:
+        out = np.zeros((n, 2))
+        sq = np.zeros(n)
+        for i in range(n):
+            keep = np.arange(n) != i
+            m = fit_ridge(x[keep], y[keep], alpha, columns=cols)
+            xi = np.repeat(x[i][None], reps, 0)
+            xi[:, noisy_cols] += noise[:, i]
+            p = m.predict(xi)
+            out[i] = p.mean(axis=0)
+            sq[i] = ((p - y[i]) ** 2).sum(axis=1).mean()
+        yield alpha, out, float(np.sqrt(sq.mean()))
 
 
 def fit_feature_mapping(samples: list[dict], min_trials: int = 12) -> dict | None:
@@ -532,31 +564,66 @@ def fit_feature_mapping(samples: list[dict], min_trials: int = 12) -> dict | Non
     if x.ndim != 2 or not np.isfinite(x).all():
         return None
     y = np.array([[s["true_x"], s["true_y"]] for s in usable], dtype=np.float64)
-    # Try each feature subset x ridge strength; keep the best by leave-one-trial-out RMSE.
+    if all(len(s.get("eye_frames") or []) >= 3 for s in usable):
+        return _fit_feature_frames(usable, x.shape[1])
+    # Try each feature subset x ridge strength; keep the best by leave-one-trial-out RMSE. The held-out trial's features get the
+    # extra noise of a single live frame (calibration features are 0.5 s means, live ones are single frames): scored on the
+    # means alone, the least regularised model always wins and then amplifies frame noise while typing (measured on the
+    # 17 Oct run: iris_core alpha 1 fell to 0.31 key hit / 0.29 RMSE on frame-like input, full alpha 100 kept 0.45 / 0.135).
     best = None
     by_subset: dict[str, float] = {}
     for name, cols in FEATURE_SUBSETS.items():
         if max(cols) >= x.shape[1]:
             continue
-        alpha, loo, scores = select_alpha(x[:, cols], y)
-        rmse = float(np.sqrt(((loo - y) ** 2).sum(axis=1).mean()))
-        by_subset[name] = round(rmse, 4)
-        if best is None or rmse < best[0]:
-            best = (rmse, name, cols, alpha, loo)
+        for alpha, loo, rmse in noisy_loo(x, y, cols):
+            if name not in by_subset or rmse < by_subset[name]:
+                by_subset[name] = round(rmse, 4)
+            if best is None or rmse < best[0]:
+                best = (rmse, name, cols, alpha, loo)
     if best is None:
         return None
     rmse, name, cols, alpha, loo = best
-    # Drift-robustness prior. Held-out accuracy within one session cannot see how a model ages: a model fitted on all the
-    # eye-region points (lids, skin around the eye) drifted far more over 40 minutes than the iris+corner points
-    # (measured on real data: their pushes on the predicted position were -0.147 vs -0.045 horizontally; the stale
-    # ring-heavy model ended at 25% key hits, vs 66-81% right after a calibration). So the narrow iris subset is
-    # preferred unless a wider one is clearly (> 15%) more accurate.
-    if name != "iris_core" and "iris_core" in by_subset and by_subset["iris_core"] <= PREFER_IRIS_WITHIN * rmse:
-        cols = FEATURE_SUBSETS["iris_core"]
-        alpha, loo, _ = select_alpha(x[:, cols], y)
-        name, rmse = "iris_core", by_subset["iris_core"]
     return {
         "model": fit_ridge(x, y, alpha, columns=cols),
+        "alpha": alpha,
+        "subset": name,
+        "loo_rmse": rmse,
+        "loo_by_subset": by_subset,
+        "loo_mu": [(float(a), float(b)) for a, b in loo],
+    }
+
+
+def _fit_feature_frames(usable: list[dict], n_features: int) -> dict | None:
+    """Frame-level fit: every stored frame is a training row labelled with its trial's target; scoring is leave-one-TRIAL-out
+    over held-out frames, so the noise the model faces while typing is in the score and the ridge strength is chosen for it."""
+    from vision.eye_features import FEATURE_SUBSETS
+    from vision.feature_model import fit_ridge
+
+    xf = np.array([f for s in usable for f in s["eye_frames"]], dtype=np.float64)
+    if xf.ndim != 2 or xf.shape[1] != n_features or not np.isfinite(xf).all():
+        return None
+    yf = np.array([[s["true_x"], s["true_y"]] for s in usable for _ in s["eye_frames"]], dtype=np.float64)
+    grp = np.array([i for i, s in enumerate(usable) for _ in s["eye_frames"]])
+    y = np.array([[s["true_x"], s["true_y"]] for s in usable], dtype=np.float64)
+    best = None
+    by_subset: dict[str, float] = {}
+    for name, cols in FEATURE_SUBSETS.items():
+        if max(cols) >= n_features:
+            continue
+        for alpha in FRAME_ALPHAS:
+            pred = np.zeros_like(yf)
+            for i in range(len(usable)):
+                m = fit_ridge(xf[grp != i], yf[grp != i], alpha, columns=cols)
+                pred[grp == i] = m.predict(xf[grp == i])
+            rmse = float(np.sqrt(((pred - yf) ** 2).sum(axis=1).mean()))
+            by_subset[name] = round(min(rmse, by_subset.get(name, rmse)), 4)
+            if best is None or rmse < best[0]:
+                best = (rmse, name, cols, alpha, np.array([pred[grp == i].mean(axis=0) for i in range(len(usable))]))
+    if best is None:
+        return None
+    rmse, name, cols, alpha, loo = best
+    return {
+        "model": fit_ridge(xf, yf, alpha, columns=cols),
         "alpha": alpha,
         "subset": name,
         "loo_rmse": rmse,

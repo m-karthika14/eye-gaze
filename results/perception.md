@@ -20,4 +20,4 @@
 
 Compare with the within-run numbers above: a mapping fitted in one sitting loses a large part of its accuracy in the next (head position, lighting and seating differ). The iris-only configuration generalised worst in this data.
 
-Key hit = nearest key to the predicted point equals the target key (chance with 40 keys is about 2.5%). RMSE is in normalised canvas units (a key is 0.10 wide and 0.25 tall). Held-out = leave-one-trial-out within the run.
+Key hit = nearest key to the predicted point equals the target key (chance with 28 keys is about 3.6%). RMSE is in normalised canvas units (a key is 0.10 wide and 0.25 tall). Held-out = leave-one-trial-out within the run.

@@ -109,7 +109,7 @@ Generated on 17 Oct 2026 by `experiments/run_results.py` (run time 1678 s): 20 f
 
 ### 5.1 Perception: how accurate is the measured gaze?
 
-Source: `results/perception.md`. A key counts as a hit when the nearest key to the predicted point is the target (chance with 40 keys is about 2.5%).
+Source: `results/perception.md`. A key counts as a hit when the nearest key to the predicted point is the target (chance with 28 keys is about 3.6%).
 
 | Run | Trials | Eye-landmark, within run (held-out trials) | Gaze CNN, within run | Mapping that was live during the run |
 |---|---|---|---|---|
@@ -126,7 +126,7 @@ The last column is how the mapping that happened to be live during that run perf
 | Eye-landmark, iris-only features, alpha 10 (**what Calibrate currently deploys**) | 12%, 25% | 0.287, 0.263 |
 | Gaze CNN, absolute-angle affine | 25%, 41% | 0.218, 0.189 |
 
-**How to write it.** "Within a calibration run, the eye-landmark mapping placed 69-84% of held-out trials on the correct key (chance ~2.5%), against 22-56% for the gaze-CNN mapping. Applied to a later calibration run, accuracy fell sharply (best configuration: 34%, 47%), i.e. a mapping fitted in one sitting does not transfer well even a few minutes later (the two runs were about five minutes apart, and the face had moved about 9% of the frame height between them). This gap, not the decoder, is the main obstacle to calibration-free use."
+**How to write it.** "Within a calibration run, the eye-landmark mapping placed 69-84% of held-out trials on the correct key (chance ~3.6%), against 22-56% for the gaze-CNN mapping. Applied to a later calibration run, accuracy fell sharply (best configuration: 34%, 47%), i.e. a mapping fitted in one sitting does not transfer well even a few minutes later (the two runs were about five minutes apart, and the face had moved about 9% of the frame height between them). This gap, not the decoder, is the main obstacle to calibration-free use."
 
 **Be careful:** the ranking of feature sets is based on one pair of runs. Do not write "eye-region features are better" as a general fact; write "in our two runs". The iris-only configuration, which seemed the most principled, generalised worst: say so (it is a finding, not an embarrassment).
 

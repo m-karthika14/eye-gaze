@@ -6,7 +6,7 @@ Each person does the app's accuracy check (Calibrate) once WITH a participant ID
 Here, for each person, a mapping is fitted on everybody ELSE's trials only and applied to them with no calibration of their own. That is
 what "calibration-free" means operationally: the user's first minute, with a mapping learned from other people.
 
-Reports per person: key hit (nearest key to the predicted point == target; chance with 40 keys ~2.5%) and RMSE (normalised canvas
+Reports per person: key hit (nearest key to the predicted point == target; chance with 28 keys ~3.6%) and RMSE (normalised canvas
 units: a key is 0.10 wide, 0.25 tall), for the eye-landmark and gaze-CNN back-ends, with and without a one-point re-centre (pressing C
 while looking at the middle of the keyboard). Then mean [95% bootstrap CI over people], median and the worst person.
 
@@ -60,7 +60,7 @@ def main() -> int:
 
     md = ["# Calibration-free test: leave-one-person-out", "",
           f"{len(people)} people. Each person is scored with a mapping fitted only on the other people (no calibration of their own). "
-          "Key hit chance with 40 keys is about 2.5%. RMSE in normalised canvas units (key = 0.10 wide, 0.25 tall).", "",
+          "Key hit chance with 28 keys is about 3.6%. RMSE in normalised canvas units (key = 0.10 wide, 0.25 tall).", "",
           "| person | " + " | ".join(label for _, _, label in CONFIGS) + " |", "|---|" + "---|" * len(CONFIGS)]
     for p in people:
         md.append(f"| {p} | " + " | ".join(f"{100 * table[l][p][0]:.0f}% / {table[l][p][1]:.3f}" for _, _, l in CONFIGS) + " |")

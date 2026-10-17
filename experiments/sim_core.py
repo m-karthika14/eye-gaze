@@ -132,6 +132,11 @@ def cross_run_errors(runs: list[list[dict]], kind: str) -> list[np.ndarray]:
 
 
 # ------------------------------------------------------------------------------------------------ across PEOPLE (calibration-free test)
+# Runs recorded before participant ids existed ("legacy") are the developer's, who later ran the study as participant "1": the same
+# person must not be both a training "other person" and the held-out person in leave-one-person-out.
+PERSON_ALIASES = {"legacy": "1"}
+
+
 def person_of(path: Path, rows: list[dict]) -> str:
     """Who a calibration run belongs to: the `participant` field (set by the app's participant-ID box), else an id in the file name
     (YYYYMMDD_HHMMSS_<id>.jsonl), else "legacy" -- all runs recorded before participant ids existed are treated as ONE person."""
@@ -150,7 +155,8 @@ def load_runs_by_person(history_dir: Path = HISTORY_DIR) -> dict[str, list[list[
     for path in sorted(history_dir.glob("*.jsonl")):
         rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
         if len(rows) >= 12 and all("eye_feat" in r and "abs_yaw" in r for r in rows):
-            out.setdefault(person_of(path, rows), []).append(rows)
+            pid = person_of(path, rows)
+            out.setdefault(PERSON_ALIASES.get(pid, pid), []).append(rows)
     return out
 
 

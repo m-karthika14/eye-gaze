@@ -66,7 +66,7 @@ Then paste numbers into the paper from `results/` only (see `PAPER_RESULTS_GUIDE
 
 ## 5. What to expect, so nothing is a surprise
 
-- **Calibration-free accuracy across people is likely much lower than within-person accuracy.** In your own two runs (same person, minutes apart) the key-hit rate fell from 69-84% to 25-47%; across people it is commonly worse. With 40 keys, the generic mapping may be too inaccurate for useful typing, and the S4 decoder (which tolerates noise) is what recovers part of it. Report whatever comes out, with the worst person.
+- **Calibration-free accuracy across people is likely much lower than within-person accuracy.** In your own two runs (same person, minutes apart) the key-hit rate fell from 69-84% to 25-47%; across people it is commonly worse. With 28 keys, the generic mapping may be too inaccurate for useful typing, and the S4 decoder (which tolerates noise) is what recovers part of it. Report whatever comes out, with the worst person.
 - **The one-point re-centre may or may not help** (it adds the noise of one trial); `loo_person.py` reports both.
 - **Few participants = wide intervals.** Call it a pilot, report CIs, and do not claim significance you cannot support.
 

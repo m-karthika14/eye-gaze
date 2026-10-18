@@ -96,47 +96,95 @@ calibration, and how much of it each decoder recovers, can be read directly from
 
 ## II. LITERATURE SURVEY
 
-**Gaze typing and assistive communication.** Eye typing has been studied for decades; the review by Majaranta and Raiha covers the
+We surveyed twelve core papers from 2016 to 2025 in four sets: webcam-based gaze estimation, calibration-free and adaptive gaze
+estimation, gaze-based text entry, and language-model-assisted augmentative and alternative communication (AAC). Each set establishes one
+ingredient of a calibration-light webcam typing system and leaves a different part open. We add the classical work on which the sets rest
+and the tools our implementation uses.
+
+**A. Webcam-based gaze estimation.** Appearance-based methods regress gaze from face or eye images [Zhang et al. 2015]. Krafka et al.
+trained a multi-region CNN (iTracker) on GazeCapture, 2.4 million frames from 1,474 people, taking both eyes, the face and a face-grid
+mask as inputs, and reached 1.71 cm (phone) and 2.53 cm (tablet) error without calibration [Krafka et al. 2016]. The error is still
+centimetre-level, the target devices are phones and tablets rather than laptops, the output is a single point without uncertainty, and no
+typing task is evaluated. Zhang et al. showed that a full-face input with learned spatial weights, which suppress uninformative regions,
+reaches 4.8 degrees person-independent 3D error on MPIIGaze and improves on iTracker by 14.3% (MPIIGaze) and 27.7% (EYEDIAP)
+[Zhang et al. 2017]; it needs a calibrated camera and a geometric normalisation, and it does not address a communication task. Gaze360
+added a temporal model that predicts a per-sample uncertainty next to the 3D gaze direction, trained on 238 people in indoor and outdoor
+scenes [Kellnhofer et al. 2019]; the uncertainty is reported but not consumed by any downstream decision or interaction. Browser-based
+tracking such as WebGazer learns a regression from eye features to the screen from the user's interactions [Papoutsaki et al. 2016], and
+lightweight open-source tools expose iris and pupil positions [Lame, GazeTracking] or regress head-normalised landmark features to the
+screen with a ridge regression after a calibration [EyeTrax, MIT licence]; a gaze-typing project built on such a pipeline exists
+[Gaze_typing, MIT licence]. We adopt the head-normalised landmark features and the ridge mapping, add frame-level training with a
+noise-aware selection criterion and a CNN alternative, and evaluate the whole system with a decoder that uses the gaze uncertainty.
+Together these works establish that an ordinary camera can estimate gaze and that its uncertainty is measurable. They leave open how the
+estimate is used for typing and how much accuracy survives when the mapping to the screen is not fitted for the user.
+
+**B. Calibration and calibration-free or adaptive gaze estimation.** Calibration fits a generic gaze model to the individual user
+[Blignaut et al. 2014]. Removing it is an open problem: saliency maps and interaction events have been used for implicit calibration
+[Sugano et al. 2010; Huang et al. 2016], and recent work evaluates calibration-free webcam tracking for user modelling [Hutt and D'Mello
+2022]. A 2023 doctoral-consortium paper reports about 3 degrees of error with calibration and 6-8 degrees without, on a commercial webcam
+tracker, and names head-movement robustness as the main obstacle [Garcia de la Santa Ramos et al. 2023]. FAZE disentangles appearance,
+head pose and gaze in a latent space and uses meta-learning to adapt to a person from as few as three labelled samples, reaching 3.18
+degrees [Park et al. 2019]; the adaptation still needs explicit labelled samples, happens offline, and is not evaluated on text entry.
+Chen and Shi decompose the predicted gaze into a subject-independent term and a subject-dependent bias, motivated by inter-subject bias
+exceeding intra-subject variance; their calibration-free mode sets the bias to zero and improves on the prior state of the art by up to
+10%, and a one-point calibration of about nine samples reduces the error by up to 35.6% [Chen and Shi 2020]. EyeO exploits the difference
+between gaze as input (typing, where the user compensates for a miscalibration) and gaze as output (reading the typed character back,
+where the user does not) to correct the calibration offset silently during typing, evaluated with 20 participants and stakeholders from
+the ALS community on a dedicated eye tracker [Saran et al. 2025]; it corrects a point estimate and does not use a language model. EyeO is
+the closest precedent to removing the explicit calibration phase. Our online bias learner has the same aim but a different cue: it
+estimates the offset from the user's own corrections (language-model corrections and backspace-retry) and works on a webcam. The
+decomposition of Chen and Shi motivates treating the residual error of an unrefitted mapping as mostly a constant offset, and our
+measurements agree in direction: a mapping fitted in one sitting loses most of its accuracy in the next, and mostly through a constant
+offset that a one-point re-centre or an online bias learner can remove. None of these papers removes calibration altogether: FAZE and Chen
+and Shi need samples or discard the bias, and EyeO needs a dedicated tracker.
+
+**C. Gaze typing and gaze-based text entry.** Eye typing has been studied for decades; the review by Majaranta and Raiha covers the
 systems and design issues of dwell-based typing [Majaranta and Raiha 2002]. Dwell selection suffers from the Midas touch problem, in which
 everything the user looks at is selected [Jacob 1990], and from the trade-off between dwell time and error; adaptive and cascading dwell
 times reduce it [Mott et al. 2017]. Dwell-free approaches decode text from the gaze path against a language model and show that large
 speed gains are possible with accurate trackers [Kristensson and Vertanen 2012]; Dasher replaces the keyboard with continuous
-language-model-driven zooming [Ward et al. 2000]. Our work uses the same probabilistic view but targets the noise level of webcam gaze and
-keeps discrete key selection, which suits users with limited control.
+language-model-driven zooming [Ward et al. 2000]. EyeSwipe lets the user trace a word with the gaze path instead of dwelling on each
+letter, matched against a dictionary, and reaches about 11.7 words per minute after practice, but it needs a dedicated tracker,
+calibration and a reverse-crossing gesture that takes practice [Kurauchi et al. 2016]. SliceType uses a language model to shrink unlikely
+keys and enlarge likely ones, with inline word predictions, and was faster and preferred over Dasher and GazeTalk in a study with 37
+novices; it assumes a reasonably accurate calibrated signal, and the adaptation is in the interface only [Benligiray et al. 2018].
+Abdrabou et al. type without calibration by correlating the gaze with the motion of moving letters (smooth pursuit) and add
+corpus-trained text suggestions, reaching 3.41 words per minute with 26 participants on a dedicated eye tracker [Abdrabou et al. 2019];
+this is the closest precedent that combines calibration-free typing with language-based suggestions, but it needs continuously moving
+stimuli, a different interaction from pointing at a static keyboard. Soft keyboards treat the touch point as a noisy observation and
+combine a spatial model with a language model [Goodman et al. 2002], and sentence-based decoders for touchscreen input follow the same
+noisy-channel formulation [Vertanen et al. 2015]. These works show that decoding strategy and language-model-driven key adaptation matter
+as much as raw accuracy. Our S4 decoder applies the noisy-channel formulation to gaze: each fixation is a Gaussian whose width is measured
+and calibrated, decoded with a word lexicon and a character n-gram model, and it keeps discrete key selection, which suits users with
+limited control. We compare it with a hard-selection baseline that is given the keyboard geometry and the calibrated noise (S1+), which
+isolates the benefit of keeping the continuous gaze distribution.
 
-**Webcam gaze estimation.** Appearance-based methods regress gaze from face or eye images [Zhang et al. 2015; Zhang et al. 2017];
-large datasets collected on phones and tablets made them practical [Krafka et al. 2016]. Browser-based eye tracking such as WebGazer
-learns a regression from eye features to the screen from the user's interactions [Papoutsaki et al. 2016]. Lightweight open-source
-tools expose iris and pupil positions [Lame, GazeTracking] or regress head-normalised landmark features to the screen with a ridge
-regression after a calibration [EyeTrax, MIT licence], and a gaze-typing project built on such a pipeline exists [Gaze_typing, MIT
-licence]. We adopt the head-normalised landmark features and the ridge mapping, add frame-level training with a noise-aware selection
-criterion and a CNN alternative, and evaluate the whole system with a decoder that uses the gaze uncertainty.
+**D. Language-model-assisted AAC.** SpeakFaster expands highly abbreviated gaze-typed input into full phrases with a fine-tuned language
+model, with 57% fewer motor actions in simulation and 29-60% higher text-entry rate for two ALS eye-gaze users [Cai et al. 2024]. A
+character-level adaptation of language models for AAC predicts the next character from limited input per keystroke, trained on simulated
+typing because no real AAC-user data was available [arXiv:2501.10582, 2025]. Valencia et al. studied live language-model suggestions with
+AAC users and found that they can speed communication but that users worried the suggestions did not reflect their own voice
+[Valencia et al. 2023]. All three assume an already working, accurate gaze or keyboard input: they use already-selected characters rather
+than a noisy per-key signal. The study of Valencia et al. is also a caution for our evaluation, which should judge whether the decoded text
+keeps the intended meaning and not only the error rate.
 
-**Calibration and calibration-free tracking.** Calibration fits a generic gaze model to the individual user [Blignaut et al. 2014].
-Removing it is an open problem: saliency maps and interaction events have been used for implicit calibration [Sugano et al. 2010;
-Huang et al. 2016], and recent work evaluates calibration-free webcam tracking for user modelling [Hutt and D'Mello 2022]. A 2023
-doctoral-consortium paper reports about 3 degrees of error with calibration and 6-8 degrees without, on a commercial webcam tracker, and
-names head-movement robustness as the main obstacle [Garcia de la Santa Ramos et al. 2023]. Our measurements agree in direction: a mapping
-fitted in one sitting loses most of its accuracy in the next, and mostly through a constant offset that a one-point re-centre or an
-online bias learner can remove.
+**E. Signal processing and gestures.** The One Euro filter smooths noisy interactive signals with a cutoff that adapts to speed [Casiez et
+al. 2012]; blinks can be detected from an eye aspect ratio computed from facial landmarks [Soukupova and Cech 2016]. Face detection and
+landmarks come from RetinaFace [Deng et al. 2020] and a MediaPipe-style mesh with iris points [Kartynnik et al. 2019]; the gaze CNN uses a
+MobileOne backbone [Vasu et al. 2023]. Ridge regression is the classical regulariser for the ill-posed fit [Hoerl and Kennard 1970].
 
-**Probabilistic text entry on noisy input.** Soft keyboards treat the touch point as a noisy observation and combine a spatial model with
-a language model [Goodman et al. 2002]; sentence-based decoders for touchscreen input follow the same noisy-channel formulation
-[Vertanen et al. 2015]. Our S4 decoder applies this formulation to gaze, with a per-fixation Gaussian whose width is measured and
-calibrated, a word lexicon and a character n-gram model. We compare it with a hard-selection baseline that is given the keyboard
-geometry and the calibrated noise (S1+), which isolates the benefit of keeping the continuous gaze distribution.
-
-**Signal processing and gestures.** The One Euro filter smooths noisy interactive signals with a cutoff that adapts to speed
-[Casiez et al. 2012]; blinks can be detected from an eye aspect ratio computed from facial landmarks [Soukupova and Cech 2016]. Face
-detection and landmarks come from RetinaFace [Deng et al. 2020] and a MediaPipe-style mesh with iris points [Kartynnik et al. 2019]; the
-gaze CNN uses a MobileOne backbone [Vasu et al. 2023]. Ridge regression is the classical regulariser for the ill-posed fit
-[Hoerl and Kennard 1970].
-
-**Gap.** Prior webcam systems either require a calibration, report accuracy only, or select one key and correct afterwards. We found no
-study that (i) states what calibration-free means for typing and reports it next to the calibrated case for the same decoders, (ii) keeps
-the per-fixation Gaussian over keys and decodes it jointly with a word lexicon, (iii) compares it with an equally tuned and
-geometry-aware hard-selection baseline on errors measured from real calibration runs, and (iv) reports within-sitting and across-sitting
-accuracy of the mapping together with the decoder results.
+**Gap.** Within the work surveyed, gaze estimators report a point estimate (or an uncertainty that nothing consumes), adaptive and
+calibration-light methods still need labelled samples, discard the personal bias or require a dedicated tracker, text-entry methods assume
+an accurate signal or moving stimuli, and language-model AAC starts after the gaze has been resolved into characters. Prior webcam systems
+either require a calibration, report accuracy only, or select one key and correct afterwards. We did not find among them a system that (i)
+states what calibration-free means for typing and reports it next to the calibrated case for the same decoders, (ii) keeps the
+per-fixation Gaussian over keys and decodes it jointly with a word lexicon and a character language model on an ordinary webcam, (iii)
+compares it with an equally tuned, geometry-aware hard-selection baseline on errors measured from real calibration runs, (iv) learns the
+residual offset online from the user's own corrections, and (v) reports within-sitting and across-sitting accuracy of the mapping together
+with the decoder results. We do not claim to eliminate calibration. In this paper "calibration-free" means that the mapping is not refitted
+for the sitting, the seat is fixed, and the user gives at most one re-centring glance (Section I-C), and the evidence for people who have
+never calibrated is limited (see Limitations). Our uncertainty is the measured scatter of each fixation, not a network-predicted value as
+in Gaze360.
 
 ---
 
@@ -509,3 +557,13 @@ re-centring glance. These limits are the content of the planned user study.
 [21] Y. Kartynnik et al., "Real-time facial surface geometry from monocular video on mobile GPUs," arXiv:1907.06724, 2019.
 [22] P. K. A. Vasu et al., "MobileOne: an improved one millisecond mobile backbone," CVPR 2023.
 [23] A. E. Hoerl and R. W. Kennard, "Ridge regression: biased estimation for nonorthogonal problems," Technometrics 1970.
+[24] P. Kellnhofer, A. Recasens, S. Stent, W. Matusik, A. Torralba, "Gaze360: physically unconstrained gaze estimation in the wild," ICCV 2019.
+[25] S. Park, S. De Mello, P. Molchanov, U. Iqbal, O. Hilliges, J. Kautz, "Few-shot adaptive gaze estimation," ICCV 2019.
+[26] Z. Chen and B. E. Shi, "Offset calibration for appearance-based gaze estimation via gaze decomposition," WACV 2020.
+[27] V. Saran, J. Alber, C. Zhang, J. Paradiso, D. Bragg, J. Langford, "EyeO: autocalibrating gaze output with gaze input for gaze typing," CHI EA 2025.
+[28] A. M. Kurauchi, W. Feng, A. Joshi, C. H. Morimoto, M. Betke, "EyeSwipe: dwell-free text entry using gaze paths," CHI 2016.
+[29] B. Benligiray, C. Topal, C. Akinlar, "SliceType: fast gaze typing with a merging keyboard," J. Multimodal User Interfaces 13(4), 2019.
+[30] V. Abdrabou, M. Mostafa, M. Khamis, W. Elmougy, "Calibration-free text entry using smooth pursuit eye movements," ETRA 2019.
+[31] S. Cai et al., "Using large language models to accelerate communication for eye gaze typing users with ALS," Nature Communications, 2024.
+[32] "Adapting large language models for character-based augmentative and alternative communication," arXiv:2501.10582, 2025.
+[33] S. Valencia, R. Cave, K. Kallarackal, K. Seaver, M. Terry, S. K. Kane, "'The less I type, the better': how AI language models can enhance or impede communication for AAC users," CHI 2023.

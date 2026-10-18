@@ -11,8 +11,8 @@
 # vision/gaze_to_screen.py still auto-expands further from live use if a
 # bigger swing is ever observed than this.
 
-half_fov_yaw_rad: 0.2028   # comfortable laptop horizontal swing (~13 deg)
-half_fov_pitch_rad: 0.1496 # increased from 0.1217 to prevent premature saturation to bottom keys (~13 deg)
+half_fov_yaw_rad: 0.2364   # comfortable laptop horizontal swing (~13 deg)
+half_fov_pitch_rad: 0.0541 # increased from 0.1217 to prevent premature saturation to bottom keys (~13 deg)
 invert_x: true            # confirmed inverted via raw pitch/yaw readout (vision/run_demo.py): looking
                           # left produced MORE POSITIVE yaw, looking right produced MORE NEGATIVE yaw --
                           # backwards from the documented convention, specific to this setup
